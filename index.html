@@ -1,0 +1,403 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>🌱 Garden Planner</title>
+<link rel="stylesheet" href="css/app.css?v=20260323d">
+</head>
+<body>
+
+<header id="app-header">
+  <h1>🌱 Garden Planner <span>offline · metric</span></h1>
+  <span id="header-garden-name" style="font-size:.78rem;font-weight:700;color:var(--text-muted);margin-left:10px">Garden: My Garden</span>
+  <div class="hdr-spacer"></div>
+  <button id="backup-alert-btn" class="hdr-btn warn" style="display:none" onclick="SettingsUI.open()" title="Auto-backup folder not configured — click to set one in Settings">⚠ No auto-backup</button>
+  <button class="hdr-btn" onclick="HelpUI.open()" title="How the app works">❓ Help</button>
+  <button class="hdr-btn" onclick="SettingsUI.open()" title="Location and frost dates">⚙ Settings</button>
+  <button class="hdr-btn" onclick="printBeds()" title="Print all bed layouts">🖨 Print</button>
+  <button class="hdr-btn" onclick="exportTextPlan()" title="Export a human-readable .txt plan">📋 Export plan</button>
+  <button class="hdr-btn" onclick="exportBackup()"   title="Download full JSON backup">💾 Backup</button>
+  <button class="hdr-btn" onclick="importBackup()"   title="Restore from JSON backup">📂 Restore</button>
+  <button class="hdr-btn" onclick="archiveSeason()" title="Save current planting to rotation history">📆 Archive Season</button>
+</header>
+
+<nav id="tab-bar">
+  <button id="tab-beds"      class="tab-btn active" onclick="switchTab('beds')">🪴 Beds</button>
+  <button id="tab-inventory" class="tab-btn"        onclick="switchTab('inventory')">📦 Seeds</button>
+  <button id="tab-plants"    class="tab-btn"        onclick="switchTab('plants')">✏️ My Plants</button>
+  <button id="tab-calendar"  class="tab-btn"        onclick="switchTab('calendar')">📅 Calendar</button>
+  <button id="tab-stats"     class="tab-btn"        onclick="switchTab('stats')">📈 Stats</button>
+  <button id="tab-journal"   class="tab-btn"        onclick="Beds.openJournalAll()">📒 Journal</button>
+</nav>
+
+<div id="app-body">
+
+  <div id="page-beds" class="page active">
+    <div class="panel-sidebar" style="width:260px">
+      <div class="panel-header">
+        🪴 Your Beds
+        <button class="btn btn-primary btn-sm" onclick="Beds.openNewBedModal()">+ New Bed</button>
+      </div>
+      <div id="bed-list" style="flex-shrink:0;border-bottom:1px solid var(--border);max-height:160px;overflow-y:auto"></div>
+
+      <div class="panel-header" style="flex-shrink:0">🌿 Plant Library</div>
+      <div class="search-wrap" style="flex-shrink:0">
+        <input class="search-input" id="bed-lib-search" placeholder="🔍 Search plants…" oninput="Beds.renderLibrary()">
+      </div>
+      <div class="filter-tabs" id="bed-lib-filters" style="flex-shrink:0">
+        <button class="ftab active" data-cat="all"       onclick="setLibCat(this)">All</button>
+        <button class="ftab"        data-cat="vegetable" onclick="setLibCat(this)">🥦</button>
+        <button class="ftab"        data-cat="herb"      onclick="setLibCat(this)">🌿</button>
+        <button class="ftab"        data-cat="fruit"     onclick="setLibCat(this)">🍓</button>
+        <button class="ftab"        data-cat="flower"    onclick="setLibCat(this)">🌸</button>
+        <button class="ftab"        data-cat="infrastructure" onclick="setLibCat(this)">🛤️</button>
+        <button class="ftab"        data-cat="custom"         onclick="setLibCat(this)">✏️</button>
+      </div>
+      <div class="plant-list" id="bed-plant-list"></div>
+    </div>
+
+    <div class="panel-main">
+      <div class="garden-toolbar">
+        <button id="bed-mode-pill" type="button" class="mode-pill" onclick="Beds.disarm()" title="Click a plant in the bed to select it">👆 Nothing selected</button>
+        <div id="armed-seed-wrap" class="armed-seed-wrap" style="display:none">
+          <label for="armed-seed-select">Seed packet</label>
+          <select id="armed-seed-select" onchange="Beds.setArmedSeed(this.value)"></select>
+        </div>
+        <div id="armed-path-wrap" class="armed-path-wrap" style="display:none">
+          <label>Color</label><input id="path-config-color" type="color" value="#c8a882" oninput="Beds.setPathConfig('color',this.value)" title="Path colour">
+          <label>Label</label><input id="path-config-desc" type="text" maxlength="40" placeholder="optional label…" style="width:120px" oninput="Beds.setPathConfig('desc',this.value)" title="Description shown on the tile">
+        </div>
+        <div class="toolbar-sep"></div>
+        <button id="rotate-selection-btn" class="btn btn-secondary" style="font-size:.76rem" onclick="Beds.rotateSelection()" title="Rotate rectangular footprint (R)" disabled>⤾ Rotate <span id="rotationLabel">0°</span></button>
+        <button class="btn btn-secondary" style="font-size:.76rem" onclick="Beds.undo()" title="Ctrl+Z">↩ Undo</button>
+        <button class="btn btn-secondary" style="font-size:.76rem" onclick="Beds.redo()" title="Ctrl+Y">↪ Redo</button>
+        <div class="toolbar-sep"></div>
+        <span style="font-size:.73rem;color:var(--text-muted)">Each cell = <strong>10×10 cm</strong> · Small plants show <strong>×N</strong> density · Press <strong>R</strong> to rotate rectangular plants · Drag planted cells to move · Hold left click + drag to place many</span>
+      </div>
+      <div class="bed-canvas-area">
+        <div class="bed-canvas-inner" id="bed-canvas-inner"></div>
+      </div>
+    </div>
+
+    <div class="info-panel">
+      <div class="info-section">
+        <h3>🌱 Armed Plant</h3>
+        <div id="bed-info-selected">
+          <div id="bed-info-selected-content" class="no-select">
+            <div style="font-size:2rem;margin-bottom:5px">👆</div>
+            Click a plant in the library to arm it, then click any cell to place it.
+          </div>
+        </div>
+      </div>
+
+      <div class="info-section" id="bed-info-detail" style="display:none">
+        <h3>🔍 Plant Details</h3>
+        <div id="bed-info-content"></div>
+      </div>
+
+      <div class="info-section">
+        <h3>🗺️ Legend</h3>
+        <div class="legend">
+          <div class="legend-item"><div class="ld" style="background:#c8e6c9;border:1px solid #81c784"></div>Empty cell</div>
+            <div style="margin-top:8px;font-size:.68rem;font-weight:800;color:var(--text-muted);text-transform:uppercase">Crop rotation</div>
+            <div class="legend-item"><div class="ld" style="background:#f5eeff;border:1px solid #8b45c5"></div>Legumes (Fabaceae)</div>
+            <div class="legend-item"><div class="ld" style="background:#dff0ff;border:1px solid #1a6fa8"></div>Brassicas (Brassicaceae)</div>
+            <div class="legend-item"><div class="ld" style="background:#ffe8e5;border:1px solid #c0392b"></div>Potatoes/Fruiting veg (Solanaceae)</div>
+            <div class="legend-item"><div class="ld" style="background:#fff8db;border:1px solid #c08a10"></div>Roots/Alliums (Apiaceae/Alliaceae)</div>
+                <div style="margin-top:8px;font-size:.68rem;font-weight:800;color:var(--text-muted);text-transform:uppercase">Growth status (thick bottom strip)</div>
+                  <div class="legend-item"><div class="ld" style="background:#9daab5"></div>📋 Planned</div>
+                  <div class="legend-item"><div class="ld" style="background:#1f4e8c"></div>🌰 Direct sowing</div>
+                  <div class="legend-item"><div class="ld" style="background:#9ec5fe"></div>🪴 Seedling tray</div>
+                  <div class="legend-item"><div class="ld" style="background:#2a9d8f"></div>🌱 Germinated</div>
+                  <div class="legend-item"><div class="ld" style="background:#52b788"></div>🌿 Transplanted</div>
+                  <div class="legend-item"><div class="ld" style="background:#43aa8b"></div>🍃 Growing</div>
+                  <div class="legend-item"><div class="ld" style="background:#d4a017"></div>🧺 Harvested (one-off)</div>
+                  <div class="legend-item"><div class="ld" style="background:#d9a441"></div>✂️ Harvesting continuous</div>
+                  <div class="legend-item"><div class="ld" style="background:#111111"></div>🌾 Gone to seed</div>
+                  <div class="legend-item"><div class="ld" style="background:#d7263d"></div>✗ Failed</div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <div id="page-inventory" class="page">
+    <div class="inv-toolbar">
+      <button class="btn btn-primary" onclick="Inventory.openNew()">+ Add Seeds</button>
+      <input class="search-input" style="max-width:220px" placeholder="🔍 Search…" oninput="Inventory.onSearch(this.value)">
+      <select style="max-width:190px" onchange="Inventory.onGerminationFilter(this.value)">
+        <option value="all">All germination</option>
+        <option value="good">Good germination</option>
+        <option value="mixed">Mixed germination</option>
+        <option value="poor">Poor germination</option>
+        <option value="nodata">No germination data</option>
+      </select>
+      <select style="max-width:180px" onchange="Inventory.onSortChange(this.value)">
+        <option value="name-asc">Sort: Name</option>
+        <option value="germ-desc">Sort: Germination high-low</option>
+        <option value="germ-asc">Sort: Germination low-high</option>
+        <option value="rating-desc">Sort: Rating high-low</option>
+        <option value="rating-asc">Sort: Rating low-high</option>
+        <option value="qty-desc">Sort: Quantity high-low</option>
+      </select>
+      <div class="filter-tabs" id="inv-filter-tabs" style="padding:0;background:transparent;border:none;margin:0">
+        <button class="ftab active" onclick="Inventory.onFilter('all',this)">All</button>
+        <button class="ftab"        onclick="Inventory.onFilter('instock',this)">In stock</button>
+        <button class="ftab"        onclick="Inventory.onFilter('low',this)">Low (≤10)</button>
+        <button class="ftab"        onclick="Inventory.onFilter('none',this)">Out of stock</button>
+      </div>
+      <span style="font-size:.73rem;color:var(--text-muted);margin-left:auto">Placing a plant in a bed automatically deducts 1 seed from inventory.</span>
+    </div>
+    <div class="inv-grid" id="inv-grid"></div>
+  </div>
+
+  <div id="page-plants" class="page">
+    <div class="plants-toolbar">
+      <button class="btn btn-primary" onclick="CustomPlants.openNew()">+ New Plant</button>
+      <div style="display:flex;align-items:center;gap:6px">
+        <select id="cp-src-select" style="max-width:240px"><option value="">— copy from existing plant —</option></select>
+        <button class="btn btn-secondary" onclick="CustomPlants.copyFromSelected()">📋 Copy as new</button>
+      </div>
+      <button class="btn btn-secondary" onclick="exportPlants()" title="Export custom & edited plants to share">📤 Export plants</button>
+      <button class="btn btn-secondary" onclick="importPlants()" title="Import plants from a shared file">📥 Import plants</button>
+      <select id="cp-type-filter" onchange="CustomPlants.setSourceFilter(this.value)">
+        <option value="all">All plants</option>
+        <option value="builtin">Built-in only</option>
+        <option value="custom">Custom only</option>
+      </select>
+      <input id="cp-filter-input" class="search-input" style="max-width:230px" placeholder="🔍 Filter plants…" oninput="CustomPlants.setFilter(this.value)">
+      <span style="font-size:.76rem;color:var(--text-muted)">All plants are listed below (built-in + custom). Use Edit in the table to update any plant.</span>
+    </div>
+    <div class="custom-plants-grid" id="custom-plants-grid"></div>
+  </div>
+
+  <div id="page-calendar" class="page" style="flex-direction:column">
+    <div style="padding:14px 20px;background:var(--surface);border-bottom:1px solid var(--border);font-size:.78rem;color:var(--text-muted)">
+      Shows sowing, transplanting &amp; harvest windows for all plants currently placed in your beds.
+    </div>
+    <div class="cal-wrap" id="cal-table-wrap"></div>
+  </div>
+
+  <div id="page-stats" class="page" style="flex-direction:column;overflow:auto">
+    <div style="padding:14px 20px;background:var(--surface);border-bottom:1px solid var(--border);font-size:.78rem;color:var(--text-muted)">
+      Tracks outcomes by plant type using growth-status history and archived seasons.
+    </div>
+    <div class="stats-wrap" id="stats-wrap"></div>
+  </div>
+
+  <div id="page-journal" class="page" style="flex-direction:column;overflow:auto">
+    <div style="padding:14px 20px;background:var(--surface);border-bottom:1px solid var(--border);font-size:.78rem;color:var(--text-muted)">
+      Bed-level timeline of planting and growth-status events, with season comparison support.
+      <div style="margin-top:4px;font-size:.72rem">Click an event to add/edit a comment, attach a photo, or delete the event.</div>
+    </div>
+    <div style="padding:14px 20px;display:flex;align-items:center;gap:16px;border-bottom:1px solid var(--border)">
+      <div style="display:flex;align-items:center;gap:8px">
+        <span style="font-size:.76rem;color:var(--text-muted)">Bed</span>
+        <select id="bed-journal-filter" onchange="Beds.setJournalBedFilter(this.value)" style="max-width:180px"></select>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px">
+        <span style="font-size:.76rem;color:var(--text-muted)">Range</span>
+        <select id="bed-journal-range" onchange="Beds.setJournalRange(this.value)" style="max-width:180px">
+          <option value="day">Last day</option>
+          <option value="week">Last 7 days</option>
+          <option value="month">Last month</option>
+          <option value="season">All season</option>
+        </select>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px">
+        <span style="font-size:.76rem;color:var(--text-muted)">Season</span>
+        <select id="bed-journal-season" onchange="Beds.setJournalSeason(this.value)" style="max-width:140px"></select>
+      </div>
+    </div>
+    <div style="flex:1;overflow:auto;padding:12px 20px 20px">
+      <div id="bed-journal-list" class="journal-list"></div>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="bed-modal">
+  <div class="modal" style="max-width:400px">
+    <button class="modal-close" onclick="Modal.close('bed-modal')">✕</button>
+    <h2 id="bm-title">🪴 New Bed</h2>
+    <div class="form-row">
+      <label>Bed name</label>
+      <input id="bm-name" type="text" placeholder="e.g. Raised Bed 1">
+    </div>
+    <div class="form-row-inline">
+      <div class="form-row">
+        <label>Width (m)</label>
+        <input id="bm-width" type="number" step="0.1" min="0.1" max="15" value="1.2">
+        <div class="form-hint">e.g. 1.2 m</div>
+      </div>
+      <div class="form-row">
+        <label>Length (m)</label>
+        <input id="bm-height" type="number" step="0.1" min="0.1" max="15" value="2.4">
+        <div class="form-hint">e.g. 2.4 m</div>
+      </div>
+    </div>
+    <p style="font-size:.73rem;color:var(--text-muted);margin-bottom:14px">Each grid cell = 10×10 cm. A 1.2×2.4 m bed = 12×24 cells = 288 planting squares.</p>
+    <input type="hidden" id="bm-id">
+    <div class="modal-actions">
+      <button class="btn btn-secondary" onclick="Modal.close('bed-modal')">Cancel</button>
+      <button class="btn btn-primary" id="bed-modal-save">Save</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="inv-modal">
+  <div class="modal">
+    <button class="modal-close" onclick="Modal.close('inv-modal')">✕</button>
+    <h2>📦 Seed Entry</h2>
+    <div id="inv-modal-body"></div>
+    <div class="modal-actions">
+      <button class="btn btn-secondary" onclick="Modal.close('inv-modal')">Cancel</button>
+      <button class="btn btn-primary" id="inv-modal-save">Save</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="cp-modal">
+  <div class="modal" style="max-width:580px">
+    <button class="modal-close" onclick="Modal.close('cp-modal')">✕</button>
+    <h2>✏️ Custom Plant</h2>
+    <div id="cp-modal-body"></div>
+    <div class="modal-actions">
+      <button class="btn btn-secondary" onclick="Modal.close('cp-modal')">Cancel</button>
+      <button class="btn btn-primary" id="cp-modal-save">Save Plant</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="journal-event-modal">
+  <div class="modal" style="max-width:560px">
+    <button class="modal-close" onclick="Beds.closeJournalEventModal()">✕</button>
+    <h2>📒 Journal Event</h2>
+    <div id="journal-event-body"></div>
+    <div class="modal-actions" style="justify-content:space-between">
+      <button class="btn btn-danger" id="journal-event-delete">🗑️ Delete Event</button>
+      <div style="display:flex;gap:8px">
+        <button class="btn btn-secondary" onclick="Beds.closeJournalEventModal()">Close</button>
+        <button class="btn btn-primary" id="journal-event-save">Save</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="bp-modal">
+  <div class="modal" style="max-width:620px">
+    <button class="modal-close" onclick="Modal.close('bp-modal')">✕</button>
+    <h2>🧬 Edit Built-in Plant</h2>
+    <div id="bp-modal-body"></div>
+    <div class="modal-actions">
+      <button class="btn btn-secondary" id="bp-modal-reset">Reset to defaults</button>
+      <button class="btn btn-secondary" onclick="Modal.close('bp-modal')">Cancel</button>
+      <button class="btn btn-primary" id="bp-modal-save">Save changes</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="settings-modal">
+  <div class="modal" style="max-width:680px">
+    <button class="modal-close" onclick="Modal.close('settings-modal')">✕</button>
+    <h2>⚙ Garden & Season Settings</h2>
+    <div class="form-row-inline">
+      <div class="form-row" style="flex:1.4">
+        <label>Garden name</label>
+        <input id="st-garden-name" type="text" placeholder="e.g. Home Garden">
+      </div>
+      <div class="form-row" style="flex:1">
+        <label>Switch garden profile</label>
+        <div style="display:flex;gap:6px;align-items:center">
+          <select id="st-garden-switch" style="min-width:180px"></select>
+          <button class="btn btn-secondary btn-sm" type="button" onclick="SettingsUI.loadSelectedGarden()">Load</button>
+        </div>
+      </div>
+    </div>
+    <div class="form-row-inline">
+      <button class="btn btn-secondary" type="button" onclick="SettingsUI.createGardenProfile()">+ New garden profile</button>
+      <button class="btn btn-danger" type="button" onclick="SettingsUI.deleteSelectedGarden()">Delete selected profile</button>
+    </div>
+    <div class="form-row">
+      <label>Location</label>
+      <input id="st-location" type="text" placeholder="e.g. Montreal, Quebec">
+    </div>
+    <div class="form-row">
+      <label>Growing zone</label>
+      <input id="st-zone" type="text" placeholder="e.g. 5b">
+    </div>
+    <div class="form-row-inline">
+      <div class="form-row">
+        <label>Last frost date</label>
+        <input id="st-last-frost" type="date">
+      </div>
+      <div class="form-row">
+        <label>First frost date</label>
+        <input id="st-first-frost" type="date">
+      </div>
+    </div>
+    <div class="form-row-inline">
+      <div class="form-row" style="flex:1.2">
+        <label>Backup folder</label>
+        <div id="st-backup-folder-label" class="form-hint">No backup folder selected yet</div>
+      </div>
+      <div class="form-row" style="flex:.5">
+        <label>Rotation</label>
+        <input id="st-backup-retention" type="number" min="1" step="1" value="10">
+      </div>
+      <div class="form-row" style="flex:.7">
+        <label>Auto-backup frequency (minutes)</label>
+        <input id="st-backup-interval" type="number" min="5" step="5" value="60">
+      </div>
+    </div>
+    <div class="form-row-inline">
+      <button class="btn btn-secondary" type="button" onclick="SettingsUI.pickBackupFolder()">📁 Choose backup folder</button>
+      <button class="btn btn-secondary" type="button" onclick="SettingsUI.saveBackupNow()">💾 Backup now</button>
+      <button class="btn btn-secondary" type="button" onclick="SettingsUI.clearBackupFolder()">Disconnect folder</button>
+    </div>
+    <div class="form-hint" id="st-backup-support"></div>
+    <div class="form-hint">Auto-backup keeps at least one backup per day, week, and month, then applies rotation.</div>
+    <div class="form-row" style="margin-top:10px">
+      <label>Backup history (current folder)</label>
+      <div id="st-backup-history" style="max-height:200px;overflow:auto;border:1px solid var(--border);border-radius:8px;padding:8px;background:var(--surface2)"></div>
+    </div>
+    <div class="form-hint">These dates are used to annotate the calendar and outdoor growing window for your region.</div>
+    <div class="modal-actions">
+      <button class="btn btn-secondary" onclick="Modal.close('settings-modal')">Cancel</button>
+      <button class="btn btn-primary" onclick="SettingsUI.save()">Save settings</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="help-modal">
+  <div class="modal" style="max-width:900px;max-height:86vh;display:flex;flex-direction:column">
+    <button class="modal-close" onclick="Modal.close('help-modal')">✕</button>
+    <h2>❓ Help</h2>
+    <div class="form-hint" id="help-guide-updated" style="margin-bottom:8px">Built-in help</div>
+    <div style="display:flex;gap:8px;margin-bottom:10px">
+      <button class="btn btn-secondary btn-sm" type="button" onclick="HelpUI.reload()">Refresh help</button>
+    </div>
+    <div id="help-guide-body" style="flex:1;overflow:auto;margin:0;padding:12px;border:1px solid var(--border);border-radius:8px;background:var(--surface2);line-height:1.45;font-size:.82rem"></div>
+    <div class="modal-actions">
+      <button class="btn btn-secondary" onclick="Modal.close('help-modal')">Close</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script src="js/data.js"></script>
+<script src="js/store.js"></script>
+<script src="js/app.js"></script>
+<script src="js/beds.js?v=20260323f"></script>
+<script src="js/inventory.js"></script>
+<script>
+function setLibCat(btn) {
+  document.querySelectorAll('#bed-lib-filters .ftab').forEach(t => t.classList.remove('active'));
+  btn.classList.add('active');
+  Beds.renderLibrary();
+}
+</script>
+
+</body>
+</html>
