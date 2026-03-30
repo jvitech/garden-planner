@@ -938,6 +938,21 @@ const CustomPlants = (() => {
       ].map(v => String(v || '').toLowerCase()).some(v => v.includes(txt));
       return sourceOk && textOk;
     });
+    
+    // Build map of unique seed packets per plant
+    const inventory = Store.getInventory();
+    const uniqueSeedPacksByPlant = new Map();
+    list.forEach(p => {
+      const packSet = new Set();
+      inventory.forEach(seed => {
+        if (seed.plantId === p.id) {
+          const packKey = (seed.seedTag || '').toLowerCase() || `entry:${seed.id}`;
+          packSet.add(packKey);
+        }
+      });
+      uniqueSeedPacksByPlant.set(p.id, packSet.size);
+    });
+    
     const grid = document.getElementById('custom-plants-grid');
     renderCopySelect();
     const searchEl = document.getElementById('cp-filter-input');
@@ -956,6 +971,7 @@ const CustomPlants = (() => {
       const rowSpacing = (Number(p.rowSpacing) || 0) > 0 ? `${Number(p.rowSpacing)} cm` : '—';
       const spacing = p.spacing ? `${p.spacing} cm` : '—';
       const companions = `${(p.good || []).length} good / ${(p.bad || []).length} bad`;
+      const seedCount = uniqueSeedPacksByPlant.get(p.id) || 0;
       const deleteBtn = p._custom
         ? `<button class="btn btn-danger btn-sm" onclick="CustomPlants.deleteP('${p.id}')">Delete</button>`
         : '';
@@ -971,9 +987,11 @@ const CustomPlants = (() => {
         <td>${escHtml(p.daysToHarvest || '—')}</td>
         <td title="${escAttr(familyLabel(p.family || ''))}">${escHtml(familyLabel(p.family || ''))}</td>
         <td>${companions}</td>
+        <td style="text-align:center;font-weight:700">${seedCount}</td>
         <td class="plants-table-actions">
           <button class="btn btn-secondary btn-sm" onclick="CustomPlants.openEdit('${p.id}')">Edit</button>
           <button class="btn btn-secondary btn-sm" onclick="CustomPlants.cloneP('${p.id}')">Copy</button>
+          <button class="btn btn-primary btn-sm" onclick="Inventory.openModal({plantId:'${p.id}'})" title="Create seed packet for this plant">seed+</button>
           ${deleteBtn}
         </td>
       </tr>`;
@@ -994,6 +1012,7 @@ const CustomPlants = (() => {
             <th>Harvest</th>
             <th>Family</th>
             <th>Companions</th>
+            <th>Seed packs</th>
             <th>Actions</th>
           </tr>
         </thead>
@@ -2079,22 +2098,17 @@ const StatsView = (() => {
     const scopedBeds = beds;
     const selectedFilterSet = contextFilterSet(bedFilter, bedContexts, bedsById);
     const currentYear = activeSeasonYear();
-    const allYears = [...new Set([
-      'current',
-      ...history.map(entry => String(entry.year)),
-      ...events.map(event => String(event.seasonYear)).filter(Boolean),
-    ])].filter((value, index, arr) => arr.indexOf(value) === index)
-      .sort((a, b) => {
-        if (a === 'current') return -1;
-        if (b === 'current') return 1;
-        return Number(b) - Number(a);
-      });
+    const archivedYears = [...new Set([
+      ...history.map(entry => Number(entry.year)),
+      ...events.map(event => Number(event.seasonYear)).filter(Boolean),
+    ])].filter(year => year !== currentYear).sort((a, b) => b - a);
+    const allYears = ['current', ...archivedYears.map(String)];
     if (seasonFilter !== 'current' && !allYears.includes(String(seasonFilter))) {
       seasonFilter = 'current';
     }
     const seasonYear = seasonFilter === 'current' ? currentYear : parseInt(seasonFilter, 10);
-    const seasonEvents = events.filter(event => event.seasonYear === seasonYear && isContextInFilter(eventBedContextId(event), selectedFilterSet));
-    const seasonHistoryEntries = history.filter(entry => entry.year === seasonYear && (bedFilter === 'all' || entry.bedId === bedFilter));
+    const seasonEvents = events.filter(event => Number(event.seasonYear) === seasonYear && isContextInFilter(eventBedContextId(event), selectedFilterSet));
+    const seasonHistoryEntries = history.filter(entry => Number(entry.year) === seasonYear && (bedFilter === 'all' || entry.bedId === bedFilter));
     const compareYears = allYears.filter(year => String(year) !== String(seasonFilter));
     if (compareYear && !compareYears.includes(String(compareYear))) {
       compareYear = '';
@@ -2103,10 +2117,10 @@ const StatsView = (() => {
     const compareActive = compareEnabled && compareYear;
     const compareSeasonYear = compareActive && compareYear !== 'current' ? parseInt(compareYear, 10) : currentYear;
     const compareEvents = compareActive
-      ? events.filter(event => event.seasonYear === compareSeasonYear && isContextInFilter(eventBedContextId(event), selectedFilterSet))
+      ? events.filter(event => Number(event.seasonYear) === compareSeasonYear && isContextInFilter(eventBedContextId(event), selectedFilterSet))
       : [];
     const compareHistoryEntries = compareActive
-      ? history.filter(entry => entry.year === compareSeasonYear && (bedFilter === 'all' || entry.bedId === bedFilter))
+      ? history.filter(entry => Number(entry.year) === compareSeasonYear && (bedFilter === 'all' || entry.bedId === bedFilter))
       : [];
 
     const bedFilterOptions = [`<option value="all" ${bedFilter==='all'?'selected':''}>All beds</option>`,

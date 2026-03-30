@@ -23,6 +23,8 @@ const Beds = (() => {
   let selectedJournalSeason = null;
   let selectedBedFilter = null;   // null = select first bed, 'all' = all beds
   let selectedJournalRange = 'day';
+  let selectedJournalSearch = '';  // search filter for journal entries
+  let selectedBedLibrarySeeded = false; // checkbox: only show plants with seed packets
   let selectedJournalEventId = null;
   let pickedJournalImageName = '';
   let pickedJournalPreviewUrl = '';
@@ -1270,10 +1272,22 @@ const Beds = (() => {
     const search  = (document.getElementById('bed-lib-search')?.value || '').toLowerCase();
     const catEl   = document.querySelector('#bed-lib-filters .ftab.active');
     const cat     = catEl?.dataset.cat ?? 'all';
+    const seededCheckbox = document.getElementById('bed-lib-seeded-only');
+    const showSeededOnly = seededCheckbox?.checked || selectedBedLibrarySeeded;
+    
+    // Get inventory plant IDs for seed filter
+    const seedPlantIds = new Set();
+    if (showSeededOnly) {
+      Store.getInventory().forEach(seed => {
+        if (seed.plantId) seedPlantIds.add(seed.plantId);
+      });
+    }
+    
     const plants  = PlantDB.all().filter(p => {
       if (cat === 'custom' && !p._custom)  return false;
       if (cat !== 'all' && cat !== 'custom' && p.cat !== cat) return false;
       if (search && !p.name.toLowerCase().includes(search)) return false;
+      if (showSeededOnly && !seedPlantIds.has(p.id)) return false;
       return true;
     });
     const el = document.getElementById('bed-plant-list');
@@ -2621,7 +2635,10 @@ const Beds = (() => {
           if (seed) {
             const sources = seedImageSources(seed);
             if (sources.length) {
-              seedImageHtml = `<img src="${escAttr(sources[0])}" alt="${escAttr(seedLabel(seed))} packet" style="width:120px;height:140px;object-fit:cover;border-radius:4px;border:2px solid #ddd" />`;
+              seedImageHtml = `<div style="position:relative;width:120px;height:140px">
+                <img src="${escAttr(sources[0])}" alt="${escAttr(seedLabel(seed))} packet" style="width:100%;height:100%;object-fit:cover;border-radius:4px;border:2px solid #ddd" data-src-list="${escAttr(sources.join('|'))}" data-src-index="0" onload="Beds.handlePlantSeedImageLoad(this)" onerror="Beds.handlePlantSeedImageError(this)" />
+                <div style="display:none;position:absolute;top:0;left:0;width:100%;height:100%;border-radius:4px;border:2px solid #ddd;background:#f5f5f5;font-size:3rem;display:flex;align-items:center;justify-content:center;color:#999">${p.emoji}</div>
+              </div>`;
             }
           }
         }
@@ -2729,25 +2746,61 @@ const Beds = (() => {
   // ── stats panel ───────────────────────────────────────────────
   // ── lifecycle ─────────────────────────────────────────────────
   function setInstanceSeed(seedId) {
-    if (!lastClickedInstance) return;
-    const { bedId, instanceId } = lastClickedInstance;
+    const targets = getLifecycleTargets();
+    if (!targets.length) return;
+    
     const beds = Store.getBeds();
-    const bed  = beds.find(b => b.id === bedId);
-    if (!bed) return;
-    Object.entries(bed.cells).forEach(([k, v]) => {
-      if (typeof v === 'object' && v?.instanceId === instanceId && v?.origin) {
-        bed.cells[k] = { ...v, seedId: seedId || null };
-      }
-    });
-    Store.updateBed(bed);
-    const origin = Object.values(bed.cells).find(v => v?.instanceId === instanceId && v?.origin);
-    if (origin) {
+    let updateCount = 0;
+    
+    targets.forEach(({ bedId, instanceId }) => {
+      const bed = beds.find(b => b.id === bedId);
+      if (!bed) return;
+      
+      // Validate: check if all instances share the same plant
+      const origin = Object.values(bed.cells).find(v => v?.instanceId === instanceId && v?.origin);
+      if (!origin) return;
+      
       const plant = PlantDB.get(origin.plantId);
-      if (plant) showPlantInfo(plant, origin.rotation || 0, instanceId, bedId);
+      if (!plant) return;
+      
+      // Validate seed packet is compatible with plant
+      if (seedId) {
+        const seed = Store.getInventory().find(s => s.id === seedId);
+        if (!seed || seed.plantId !== plant.id) {
+          // Skip incompatible packet
+          return;
+        }
+      }
+      
+      // Apply seed to all cells of this instance
+      Object.entries(bed.cells).forEach(([k, v]) => {
+        if (typeof v === 'object' && v?.instanceId === instanceId && v?.origin) {
+          bed.cells[k] = { ...v, seedId: seedId || null };
+        }
+      });
+      
+      updateCount++;
+      Store.updateBed(bed);
+    });
+    
+    // Update display (show last clicked instance if available)
+    if (lastClickedInstance) {
+      const bed = beds.find(b => b.id === lastClickedInstance.bedId);
+      if (bed) {
+        const origin = Object.values(bed.cells).find(v => v?.instanceId === lastClickedInstance.instanceId && v?.origin);
+        if (origin) {
+          const plant = PlantDB.get(origin.plantId);
+          showPlantInfo(plant, origin.rotation || 0, lastClickedInstance.instanceId, lastClickedInstance.bedId);
+        }
+      }
     }
+    
     renderCanvas();
     renderBedJournal();
-    Toast.show(seedId ? 'Seed packet linked' : 'Using generic planting');
+    const msg = targets.length > 1
+      ? `Seed packet applied to ${updateCount} selected instance${updateCount !== 1 ? 's' : ''}`
+      : (seedId ? 'Seed packet linked' : 'Using generic planting');
+    Toast.show(msg);
   }
 
   function setPlantingMode(value) {
@@ -3104,8 +3157,30 @@ const Beds = (() => {
         return a.ts < b.ts ? 1 : -1;
       });
     const items = filterJournalItemsByRange(seasonItems, seasonYear);
+    
+    // Apply search filter if specified
+    let searchedItems = items;
+    if (selectedJournalSearch) {
+      const needle = selectedJournalSearch.toLowerCase();
+      searchedItems = items.filter(e => {
+        const plant = PlantDB.get(e.plantId);
+        const seed = e.seedId ? Store.getInventory().find(s => s.id === e.seedId) : null;
+        const to = LC_META[e.toState]?.label || e.toState || 'Updated';
+        const from = e.fromState ? (LC_META[e.fromState]?.label || e.fromState) : null;
+        const bedName = journalContextName(e, contexts);
+        const searchable = [
+          plant?.name || '',
+          e.note || '',
+          to,
+          from || '',
+          seed ? seedLabel(seed) : '',
+          bedName
+        ].join(' ').toLowerCase();
+        return searchable.includes(needle);
+      });
+    }
 
-    if (!items.length) {
+    if (!searchedItems.length) {
       const selectedLabel = selectedBedFilter === 'all'
         ? 'All beds'
         : escHtml(contexts.get(selectedBedFilter)?.name || filteredContexts[0]?.name || 'Bed');
@@ -3114,7 +3189,8 @@ const Beds = (() => {
         : selectedJournalRange === 'week' ? 'the last 7 days'
         : selectedJournalRange === 'month' ? 'the last month'
         : `${seasonYear}`;
-      el.innerHTML = `<div class="journal-empty"><strong>${bedsText}</strong><br>No growth events for ${rangeLabel}.<br>Update plant statuses to start your log.</div>`;
+      const msgEnd = selectedJournalSearch ? `matching "${selectedJournalSearch}".` : 'for ' + rangeLabel + '.';
+      el.innerHTML = `<div class="journal-empty"><strong>${bedsText}</strong><br>No growth events ${msgEnd}<br>Update plant statuses to start your log.</div>`;
       return;
     }
 
@@ -3124,7 +3200,7 @@ const Beds = (() => {
       ? `<div style="font-size:.82rem;font-weight:800;margin:2px 0 10px">All Beds · ${seasonYear}</div>`
       : `<div style="font-size:.82rem;font-weight:800;margin:2px 0 10px">${escHtml(contexts.get(selectedBedFilter)?.name || filteredContexts[0]?.name || 'Bed')} · ${seasonYear}</div>`;
 
-    el.innerHTML = head + items.map(e => {
+    el.innerHTML = head + searchedItems.map(e => {
       const plant = PlantDB.get(e.plantId);
       const seed = e.seedId ? Store.getInventory().find(s => s.id === e.seedId) : null;
       const to = LC_META[e.toState]?.label || e.toState || 'Updated';
@@ -3173,6 +3249,16 @@ const Beds = (() => {
       selectedBedFilter = bedIdOrAll;
       renderBedJournal();
     }
+  }
+
+  function setJournalSearch(text) {
+    selectedJournalSearch = (text || '').toLowerCase();
+    renderBedJournal();
+  }
+
+  function setLibrarySeededOnly(checked) {
+    selectedBedLibrarySeeded = !!checked;
+    renderLibrary();
   }
 
   function openJournalEvent(eventId) {
@@ -3254,6 +3340,28 @@ const Beds = (() => {
     fallback.className = 'journal-media-fallback';
     fallback.textContent = '🌱';
     img.replaceWith(fallback);
+  }
+
+  function handlePlantSeedImageLoad(img) {
+    img.style.display = 'block';
+    const fallback = img.nextElementSibling;
+    if (fallback) fallback.style.display = 'none';
+  }
+
+  function handlePlantSeedImageError(img) {
+    const sources = (img.dataset.srcList || '').split('|').filter(Boolean);
+    const currentIndex = parseInt(img.dataset.srcIndex || '0', 10);
+
+    if (currentIndex + 1 < sources.length) {
+      img.dataset.srcIndex = String(currentIndex + 1);
+      img.src = sources[currentIndex + 1];
+      return;
+    }
+
+    // All sources exhausted, show fallback emoji
+    img.style.display = 'none';
+    const fallback = img.nextElementSibling;
+    if (fallback) fallback.style.display = 'flex';
   }
 
   function openJournalImage(evt, imgEl) {
@@ -3763,10 +3871,10 @@ const Beds = (() => {
     updateSelectedPathMeta,
     promptRenameBed,
     undo, redo, updateStats,
-    setLifecycle, setArmedSeed, setInstanceSeed, setJournalSeason, setJournalBedFilter, openJournalEvent,
-    handleJournalImageLoad, handleJournalImageError, handleCellImageLoad, handleCellImageError, openJournalImage, setJournalPhotoFilename,
+    setLifecycle, setArmedSeed, setInstanceSeed, setJournalSeason, setJournalBedFilter, setJournalSearch, openJournalEvent,
+    handleJournalImageLoad, handleJournalImageError, handleCellImageLoad, handleCellImageError, handlePlantSeedImageLoad, handlePlantSeedImageError, openJournalImage, setJournalPhotoFilename,
     previewJournalImageFile, usePickedJournalFilename, syncJournalImageHint,
     saveJournalEventChanges, deleteJournalEvent, closeJournalEventModal,
-    renderBedJournal, setJournalRange,
+    renderBedJournal, setJournalRange, renderLibrary, setLibrarySeededOnly,
   };
 })();

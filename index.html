@@ -54,6 +54,12 @@
         <button class="ftab"        data-cat="infrastructure" onclick="setLibCat(this)">🛤️</button>
         <button class="ftab"        data-cat="custom"         onclick="setLibCat(this)">✏️</button>
       </div>
+      <div style="flex-shrink:0;padding:8px;border-bottom:1px solid var(--border);font-size:.74rem">
+        <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
+          <input type="checkbox" id="bed-lib-seeded-only" onchange="Beds.setLibrarySeededOnly(this.checked)">
+          <span>Only with seed packets</span>
+        </label>
+      </div>
       <div class="plant-list" id="bed-plant-list"></div>
     </div>
 
@@ -210,6 +216,9 @@
       <div style="display:flex;align-items:center;gap:8px">
         <span style="font-size:.76rem;color:var(--text-muted)">Season</span>
         <select id="bed-journal-season" onchange="Beds.setJournalSeason(this.value)" style="max-width:140px"></select>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;margin-left:auto">
+        <input type="text" id="bed-journal-search" placeholder="🔍 Search journal…" style="max-width:180px" oninput="Beds.setJournalSearch(this.value)">
       </div>
     </div>
     <div style="flex:1;overflow:auto;padding:12px 20px 20px">
