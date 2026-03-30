@@ -52,9 +52,39 @@ const Store = (() => {
     return {
       id:      'bed_' + Date.now(),
       name:    name || 'New Bed',
+      type:    'bed',
       widthM:  +widthM,
       heightM: +heightM,
       cols, rows,
+      cells: {},
+    };
+  }
+
+  function newPlotBed(name, widthM, heightM) {
+    const cols = Math.max(1, Math.round(widthM  / 0.1));
+    const rows = Math.max(1, Math.round(heightM / 0.1));
+    return {
+      id:      'bed_' + Date.now(),
+      name:    name || 'New Plot',
+      type:    'plot',
+      widthM:  +widthM,
+      heightM: +heightM,
+      cols, rows,
+      cells: {},
+    };
+  }
+
+  function newSeedTrayBed(name, cols, rows) {
+    const safeCols = Math.max(1, Math.round(cols));
+    const safeRows = Math.max(1, Math.round(rows));
+    return {
+      id:        'bed_' + Date.now(),
+      name:      name || 'New Tray',
+      type:      'tray',
+      widthM:    +(safeCols * 0.1).toFixed(2),
+      heightM:   +(safeRows * 0.1).toFixed(2),
+      cols:      safeCols,
+      rows:      safeRows,
       cells: {},
     };
   }
@@ -195,11 +225,15 @@ const Store = (() => {
         direct_sow: 0,
         tray_seeded: 0,
         germinated: 0,
+        ready_to_transplant: 0,
+        hardened: 0,
         transplanted: 0,
         growing: 0,
         harvested_once: 0,
         harvested_continuous: 0,
         gone_to_seed: 0,
+        failed_germination: 0,
+        failed_plant: 0,
         failed: 0,
       };
       const occupiedCells = Object.keys(bed.cells || {}).length;
@@ -292,7 +326,7 @@ const Store = (() => {
   }
 
   return {
-    getBeds, saveBeds, newBed, updateBed, deleteBed,
+    getBeds, saveBeds, newBed, newPlotBed, newSeedTrayBed, updateBed, deleteBed,
     getCustomPlants, saveCustomPlants, upsertCustomPlant, deleteCustomPlant,
     getBuiltinPlantOverrides, saveBuiltinPlantOverrides, upsertBuiltinPlantOverride, deleteBuiltinPlantOverride,
     getInventory, saveInventory, upsertSeed, deleteSeed, adjustSeedQty,

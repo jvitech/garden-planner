@@ -1555,3 +1555,72 @@ body {
     display: none !important;
   }
 }
+
+/* ================================================================
+   SEED TRAY BED STYLES
+   ================================================================ */
+
+/* Amber title bar distinguishes seed tray beds from normal beds */
+.seed-tray-block .bed-title-bar {
+  background: #a26209;
+}
+.plot-bed-block .bed-title-bar {
+  background: #1d3557;
+}
+
+/* "Seed Tray" pill badge inside the title bar */
+.tray-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: .58rem;
+  font-weight: 800;
+  padding: 2px 7px;
+  border-radius: 10px;
+  background: rgba(255,255,255,.22);
+  border: 1px solid rgba(255,255,255,.5);
+  color: #fff;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+/* Planting-mode hint chip in the plant details panel */
+.planting-mode-hint {
+  margin: 0 0 8px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: #fff8db;
+  border: 1px solid #c08a10;
+  font-size: .68rem;
+  color: #6b4a00;
+  font-weight: 600;
+}
+
+/* Transplant source block in the plant details panel */
+.transplant-source-block {
+  margin-top: 8px;
+  padding: 8px;
+  border: 1px solid #e07a3a;
+  border-radius: 8px;
+  background: #fff8f0;
+}
+.transplant-source-block .ts-header {
+  font-size: .62rem;
+  font-weight: 800;
+  color: #a0522d;
+  margin-bottom: 5px;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+}
+.transplant-source-block select {
+  width: 100%;
+  margin-bottom: 6px;
+}
+.transplant-source-linked {
+  font-size: .68rem;
+  color: #2d7a40;
+  font-weight: 700;
+  margin-top: 4px;
+}

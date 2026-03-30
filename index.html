@@ -110,6 +110,8 @@
                   <div class="legend-item"><div class="ld" style="background:#1f4e8c"></div>🌰 Direct sowing</div>
                   <div class="legend-item"><div class="ld" style="background:#9ec5fe"></div>🪴 Seedling tray</div>
                   <div class="legend-item"><div class="ld" style="background:#2a9d8f"></div>🌱 Germinated</div>
+                  <div class="legend-item"><div class="ld" style="background:#f4a261"></div>🏺 Ready to transplant</div>
+                  <div class="legend-item"><div class="ld" style="background:#e9c46a"></div>🌤️ Hardened off</div>
                   <div class="legend-item"><div class="ld" style="background:#52b788"></div>🌿 Transplanted</div>
                   <div class="legend-item"><div class="ld" style="background:#43aa8b"></div>🍃 Growing</div>
                   <div class="legend-item"><div class="ld" style="background:#d4a017"></div>🧺 Harvested (one-off)</div>
@@ -224,7 +226,15 @@
       <label>Bed name</label>
       <input id="bm-name" type="text" placeholder="e.g. Raised Bed 1">
     </div>
-    <div class="form-row-inline">
+    <div class="form-row">
+      <label for="bm-bed-type">Bed type</label>
+      <select id="bm-bed-type" onchange="Beds.onBedTypeChange(this.value)">
+        <option value="bed">Bed — standard garden bed</option>
+        <option value="plot">Plot — groups sub-beds / zones</option>
+        <option value="tray">Seed Tray — germination tray (1 cell = 1 seedling)</option>
+      </select>
+    </div>
+    <div id="bm-meters-row" class="form-row-inline">
       <div class="form-row">
         <label>Width (m)</label>
         <input id="bm-width" type="number" step="0.1" min="0.1" max="15" value="1.2">
@@ -236,7 +246,21 @@
         <div class="form-hint">e.g. 2.4 m</div>
       </div>
     </div>
-    <p style="font-size:.73rem;color:var(--text-muted);margin-bottom:14px">Each grid cell = 10×10 cm. A 1.2×2.4 m bed = 12×24 cells = 288 planting squares.</p>
+    <div id="bm-tray-row" class="form-row-inline" style="display:none">
+      <div class="form-row">
+        <label>Columns</label>
+        <input id="bm-tray-cols" type="number" min="1" max="150" value="12">
+        <div class="form-hint">e.g. 12</div>
+      </div>
+      <div class="form-row">
+        <label>Rows</label>
+        <input id="bm-tray-rows" type="number" min="1" max="150" value="8">
+        <div class="form-hint">e.g. 8 (= 96 cells)</div>
+      </div>
+    </div>
+    <p id="bm-hint-meters" style="font-size:.73rem;color:var(--text-muted);margin-bottom:14px">Each grid cell = 10×10 cm. A 1.2×2.4 m bed = 12×24 cells = 288 planting squares.</p>
+    <p id="bm-hint-tray" style="font-size:.73rem;color:var(--text-muted);margin-bottom:14px;display:none">Each cell = one seedling slot. E.g. 12×8 = 96 cells.</p>
+    <p id="bm-hint-plot" style="font-size:.73rem;color:var(--text-muted);margin-bottom:14px;display:none">A Plot groups sub-beds drawn as zones on the grid. Use ➕ Add bed in the title bar to draw zones after saving.</p>
     <input type="hidden" id="bm-id">
     <div class="modal-actions">
       <button class="btn btn-secondary" onclick="Modal.close('bed-modal')">Cancel</button>

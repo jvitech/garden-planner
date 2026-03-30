@@ -49,28 +49,37 @@ const Beds = (() => {
   const MAX_CELLS  = 150;        // safety cap per axis (supports up to 15 m at 10 cm cells)
 
   // ── lifecycle constants ───────────────────────────────────────
-  const LC_STATES = ['planned', 'direct_sow', 'tray_seeded', 'germinated', 'transplanted', 'growing', 'harvested_once', 'harvested_continuous', 'gone_to_seed', 'failed'];
+  const LC_STATES = ['planned', 'direct_sow', 'tray_seeded', 'germinated', 'ready_to_transplant', 'hardened', 'transplanted', 'growing', 'harvested_once', 'harvested_continuous', 'gone_to_seed', 'failed_germination', 'failed_plant'];
   const LC_META = {
     planned:              { label:'Planned',              icon:'📋', color:'#9daab5' },
     direct_sow:           { label:'Direct sowing',        icon:'🌰', color:'#1f4e8c' },
     tray_seeded:          { label:'Seedling tray',        icon:'🪴', color:'#9ec5fe' },
     germinated:           { label:'Germinated',           icon:'🌱', color:'#2a9d8f' },
+    ready_to_transplant:  { label:'Ready to transplant',  icon:'🏺', color:'#f4a261' },
+    hardened:             { label:'Hardened off',         icon:'🌤️', color:'#e9c46a' },
     transplanted:         { label:'Transplanted',         icon:'🌿', color:'#52b788' },
     growing:              { label:'Growing',              icon:'🍃', color:'#43aa8b' },
     harvested_once:       { label:'Harvested (one-off)',  icon:'🧺', color:'#d4a017' },
     harvested_continuous: { label:'Harvesting continuous',icon:'✂️', color:'#d9a441' },
     gone_to_seed:         { label:'Gone to seed',         icon:'🌾', color:'#111111' },
+    failed_germination:   { label:'Failed (germination)',  icon:'🌧️', color:'#d7263d' },
+    failed_plant:         { label:'Failed (plant)',        icon:'✗',  color:'#9b1a2a' },
+    // legacy — kept for rendering old data
     failed:               { label:'Failed',               icon:'✗',  color:'#d7263d' },
   };
-  const LC_TIMELINE_ORDER = ['direct_sow', 'tray_seeded', 'germinated', 'transplanted', 'growing', 'harvested_once', 'harvested_continuous', 'gone_to_seed', 'failed'];
+  const LC_TIMELINE_ORDER = ['direct_sow', 'tray_seeded', 'germinated', 'ready_to_transplant', 'hardened', 'transplanted', 'growing', 'harvested_once', 'harvested_continuous', 'gone_to_seed', 'failed_germination', 'failed_plant'];
 
-  function currentSeasonYear() {
-    const settings = Store.getSettings();
-    const fromDates = [settings.lastFrost, settings.firstFrost]
-      .filter(Boolean)
-      .map(v => new Date(v + 'T12:00:00').getFullYear())
-      .find(y => Number.isFinite(y));
-    return fromDates || new Date().getFullYear();
+  // States restricted to seed tray beds only.
+  const LC_TRAY_ONLY = new Set(['ready_to_transplant', 'hardened']);
+  // States not shown in seed tray beds (end-of-life garden states).
+  const LC_NORMAL_ONLY = new Set(['direct_sow', 'growing', 'harvested_once', 'harvested_continuous', 'gone_to_seed', 'failed_plant']);
+
+  function isSeedTrayBed(bed) { return bed?.type === 'tray'; }
+  function isPlotBed(bed)     { return bed?.type === 'plot'; }
+
+  function lcStatesForBed(bed) {
+    if (isSeedTrayBed(bed)) return LC_STATES.filter(s => !LC_NORMAL_ONLY.has(s));
+    return LC_STATES.filter(s => !LC_TRAY_ONLY.has(s));
   }
 
   function seedsForPlant(plantId, includeZero = false) {
@@ -111,10 +120,15 @@ const Beds = (() => {
     return [journalImageUrl(explicit), seedImageUrl(explicit)];
   }
 
-  function renderJournalMedia(event, emoji, label) {
+  function renderJournalMedia(event, actionIcon, plantEmoji, label) {
     const sources = journalImageSources(event);
     if (!sources.length) {
-      return `<div class="journal-media-fallback">${emoji || '🌱'}</div>`;
+      const big   = actionIcon  || '📋';
+      const small = plantEmoji  || '';
+      return `<div class="journal-media-fallback" style="position:relative">
+        <span style="font-size:1.35rem;line-height:1">${big}</span>
+        ${small ? `<span style="position:absolute;bottom:2px;right:3px;font-size:.65rem;line-height:1">${small}</span>` : ''}
+      </div>`;
     }
     return `<img class="journal-media-img" src="${escAttr(sources[0])}" alt="${escAttr(label)}" data-src-list="${escAttr(sources.join('|'))}" data-src-index="0" onload="Beds.handleJournalImageLoad(this)" onerror="Beds.handleJournalImageError(this)" onclick="Beds.openJournalImage(event, this)">`;
   }
@@ -174,7 +188,7 @@ const Beds = (() => {
 
   function lifecycleTimelineForInstance(instanceId, bedId, plantId) {
     if (!instanceId || !bedId || !plantId) return [];
-    const year = currentSeasonYear();
+    const year = activeSeasonYear();
     const bed = Store.getBeds().find(b => b.id === bedId) || null;
     let instanceContextId = bedId;
     if (bed) {
@@ -242,6 +256,8 @@ const Beds = (() => {
       blockCols: val.blockCols || 0,
       pathColor: val.pathColor || null,
       pathDesc: val.pathDesc || null,
+      transplantSourceBedId:      val.transplantSourceBedId      || null,
+      transplantSourceInstanceId: val.transplantSourceInstanceId || null,
     };
   }
 
@@ -782,13 +798,6 @@ const Beds = (() => {
     selectBed(bedId);
     if (selectedPlantId) disarm();
     const bed = Store.getBeds().find(b => b.id === bedId);
-    if (!plotDrawMode && bed) {
-      const hasPlants = Object.entries(bed.cells || {}).some(([k, v]) => !!normalizeCellValue(v, k));
-      if (hasPlants) {
-        Toast.show('Plot mode can only be enabled on an empty bed');
-        return;
-      }
-    }
     ignoreNextClick = false;
     plotDrawMode = !plotDrawMode;
     plotAnchor = null;
@@ -797,6 +806,19 @@ const Beds = (() => {
     renderCanvas();
     if (plotDrawMode) Toast.show('Plot draw mode: click start corner, then opposite corner to create a mapped bed');
     else Toast.show('Plot draw mode off');
+  }
+
+  function startPlotZoneDraw(bedId) {
+    if (!bedId) return;
+    selectBed(bedId);
+    if (selectedPlantId) disarm();
+    ignoreNextClick = false;
+    plotDrawMode = true;
+    plotAnchor   = null;
+    plotPaint    = null;
+    clearPreview();
+    renderCanvas();
+    Toast.show('Click start corner, then opposite corner to add a sub-bed');
   }
 
   function createMappedBedFromRect(bedId, rect) {
@@ -833,6 +855,9 @@ const Beds = (() => {
 
     Store.updateBed(parent);
     selectedPlotZone = { bedId: parent.id, zoneId };
+    // Plot-type beds stay in draw mode so the user can immediately add another zone.
+    // Standard beds exit draw mode after zone creation.
+    if (!isPlotBed(parent)) plotDrawMode = false;
     renderBedList();
     renderCanvas();
     updateStats();
@@ -973,7 +998,7 @@ const Beds = (() => {
 
     if (selectedPlantId !== '__path__') {
       Store.addLifecycleEvent({
-        seasonYear: currentSeasonYear(),
+        seasonYear: activeSeasonYear(),
         bedId: bed.id,
         bedName: bed.name,
         bedContextId: context.bedContextId,
@@ -1088,12 +1113,15 @@ const Beds = (() => {
     if (label) label.textContent = `${selectedRotation}°`;
     const button = document.getElementById('rotate-selection-btn');
     if (!button) return;
+    const activeBed = activeBedId ? Store.getBeds().find(b => b.id === activeBedId) : null;
     const plant = selectedPlantId ? PlantDB.get(selectedPlantId) : null;
-    const rotatable = !!(plant && isRotatable(plant));
+    // Rotation is meaningless in seed trays (all plants are 1×1).
+    const rotatable = !!(plant && isRotatable(plant) && !isSeedTrayBed(activeBed));
     button.disabled = !rotatable;
     button.title = rotatable
       ? 'Rotate rectangular footprint (R)'
-      : (plant ? 'Rotation is only available for rectangular footprints' : 'Select a plant first');
+      : (isSeedTrayBed(activeBed) ? 'Rotation not available in seed trays (all cells are 1×1)'
+         : plant ? 'Rotation is only available for rectangular footprints' : 'Select a plant first');
   }
 
   function getPlacementPlan(bed, r, c, plantId, rotation = 0, ignoreInstanceId = null) {
@@ -1103,6 +1131,15 @@ const Beds = (() => {
     const origin = getCenteredOrigin(bed, r, c, fp);
     const ok = canPlaceFootprint(bed, origin.startR, origin.startC, fp, ignoreInstanceId);
     return { plant, fp, origin, ok, rotation };
+  }
+
+  // For seed tray beds every plant is exactly 1×1. No centering offset needed.
+  function getTrayPlacementPlan(bed, r, c, plantId, ignoreInstanceId = null) {
+    const plant = PlantDB.get(plantId);
+    if (!plant) return null;
+    const fp = { widthCm: CELL_CM, heightCm: CELL_CM, cols: 1, rows: 1 };
+    const ok = canPlaceFootprint(bed, r, c, fp, ignoreInstanceId);
+    return { plant, fp, origin: { startR: r, startC: c }, ok, rotation: 0 };
   }
 
   function ensureHintEl() {
@@ -1141,7 +1178,9 @@ const Beds = (() => {
           const ok = canPlaceFootprint(bed, origin.startR, origin.startC, fp, ignoreInstanceId);
           return { plant: PlantDB.get('__path__'), fp, origin, ok, rotation: 0 };
         })()
-      : getPlacementPlan(bed, r, c, plantId, rotation, ignoreInstanceId);
+      : isSeedTrayBed(bed)
+          ? getTrayPlacementPlan(bed, r, c, plantId, ignoreInstanceId)
+          : getPlacementPlan(bed, r, c, plantId, rotation, ignoreInstanceId);
     if (!plan) return;
 
     for (let rr = plan.origin.startR; rr < plan.origin.startR + plan.fp.rows; rr++) {
@@ -1177,22 +1216,20 @@ const Beds = (() => {
       activeBedId = null;
       return;
     }
+    if (!activeBedId || !beds.find(b => b.id === activeBedId)) {
+      activeBedId = beds[0].id;
+    }
+
     el.innerHTML = beds.map(b => `
       <div class="bed-list-item ${b.id === activeBedId ? 'active' : ''}" onclick="Beds.selectBed('${b.id}')">
         <div class="bli-icon">🪴</div>
         <div style="flex:1;min-width:0">
           <div class="bli-name">${escHtml(b.name)}</div>
-          <div class="bli-meta">${b.widthM}m × ${b.heightM}m · ${countBedPlants(b)} plants</div>
+          <div class="bli-meta">${isSeedTrayBed(b) ? `🪴 ${b.cols}×${b.rows} cells` : isPlotBed(b) ? `🗺️ ${b.widthM}m × ${b.heightM}m · Plot` : `${b.widthM}m × ${b.heightM}m`} · ${countBedPlants(b)} plants</div>
         </div>
         <button class="btn btn-sm" title="Rename bed" onclick="event.stopPropagation();Beds.promptRenameBed('${b.id}')">✏️</button>
         <button class="btn btn-sm danger" title="Delete bed" onclick="event.stopPropagation();Beds.deleteBed('${b.id}')">🗑️</button>
       </div>`).join('');
-
-    if (!activeBedId || !beds.find(b => b.id === activeBedId)) {
-      activeBedId = beds[0].id;
-      // re-render to highlight
-      renderBedList();
-    }
   }
 
   function selectBed(id) {
@@ -1319,6 +1356,16 @@ const Beds = (() => {
   }
 
   function setRowMode(enabled) {
+    if (enabled) {
+      const plant = selectedPlantId ? PlantDB.get(selectedPlantId) : null;
+      if (plant && !plant._isPath && !(Number(plant.rowSpacing) > 0)) {
+        Toast.show('Row mode requires a "Space between row centers" to be set on this plant. Set it via ✏️ Edit plant.');
+        // Uncheck the checkbox without toggling mode on
+        const cb = document.querySelector('#bed-info-selected-content input[type="checkbox"]');
+        if (cb) cb.checked = false;
+        return;
+      }
+    }
     rowPlacementMode = !!enabled;
     clearPreview();
     updateSelectedPanel();
@@ -1478,6 +1525,7 @@ const Beds = (() => {
     const inv = Store.getInventory();
     const chosenSeed = selectedSeedId ? inv.find(s => s.id === selectedSeedId && s.plantId === selectedPlantId) : null;
     const isPath = selectedPlantId === '__path__';
+    const bedIsTray = isSeedTrayBed(bed);
     const plan = isPath
       ? (() => {
           const fp = { rows: PATH_DEFAULT_CELLS, cols: PATH_DEFAULT_CELLS, widthCm: PATH_DEFAULT_CELLS * CELL_CM, heightCm: PATH_DEFAULT_CELLS * CELL_CM };
@@ -1485,8 +1533,10 @@ const Beds = (() => {
           const ok = canPlaceFootprint(bed, origin.startR, origin.startC, fp);
           return { plant: PlantDB.get('__path__'), fp, origin, ok, rotation: 0 };
         })()
-      : getPlacementPlan(bed, r, c, selectedPlantId, selectedRotation);
-    const zone = activePlotZoneForBed(bedId);
+      : bedIsTray
+          ? getTrayPlacementPlan(bed, r, c, selectedPlantId)
+          : getPlacementPlan(bed, r, c, selectedPlantId, selectedRotation);
+    const zone = bedIsTray ? null : activePlotZoneForBed(bedId);
     if (!plan) return false;
 
     if (!plan.ok) {
@@ -1494,23 +1544,25 @@ const Beds = (() => {
       return false;
     }
     const isInfra = plan.plant._isPath || plan.plant.cat === 'infrastructure';
-    const mappedZones = plotLayoutForBed(bed);
-    const contextZone = zone || mappedZones.find(item => zoneContainsFootprint(item, plan.origin.startR, plan.origin.startC, plan.fp)) || null;
-    if (!isInfra && mappedZones.length && !contextZone) {
-      if (!silent) Toast.show('This plot uses mapped beds: place plants inside a mapped bed');
-      return false;
-    }
-    if (!isInfra && !zoneContainsFootprint(contextZone, plan.origin.startR, plan.origin.startC, plan.fp)) {
-      if (!silent) Toast.show('Selected zone active: place plants inside the highlighted zone');
-      return false;
+    if (!bedIsTray) {
+      const mappedZones = plotLayoutForBed(bed);
+      const contextZone = zone || mappedZones.find(item => zoneContainsFootprint(item, plan.origin.startR, plan.origin.startC, plan.fp)) || null;
+      if (!isInfra && mappedZones.length && !contextZone) {
+        if (!silent) Toast.show('This plot uses mapped beds: place plants inside a mapped bed');
+        return false;
+      }
+      if (!isInfra && !zoneContainsFootprint(contextZone, plan.origin.startR, plan.origin.startC, plan.fp)) {
+        if (!silent) Toast.show('Selected zone active: place plants inside the highlighted zone');
+        return false;
+      }
     }
 
     if (!skipUndo) pushUndo(bedId, bed);
 
-    // Crop rotation warning: alert if same botanical family was in this bed within the past 3 years
+    // Crop rotation warning: skip for seed trays (rotation tracking is garden-side only)
     const plantBeingPlaced = PlantDB.get(selectedPlantId);
-    if (plantBeingPlaced?.family && !plantBeingPlaced.rotationDisabled && !silent) {
-      const currentYear = currentSeasonYear();
+    if (!bedIsTray && plantBeingPlaced?.family && !plantBeingPlaced.rotationDisabled && !silent) {
+      const currentYear = activeSeasonYear();
       for (let i = 1; i <= 3; i++) {
         const checkYear = currentYear - i;
         const families = Store.getFamiliesInBedYear(bedId, checkYear);
@@ -1522,7 +1574,8 @@ const Beds = (() => {
     }
 
     const placeSeedId = (chosenSeed && (chosenSeed.qty || 0) > 0) ? chosenSeed.id : null;
-    const context = bedContextForCell(bed, plan.origin.startR, plan.origin.startC, contextZone);
+    const effectiveZone = bedIsTray ? null : (zone || (plotLayoutForBed(bed).find(item => zoneContainsFootprint(item, plan.origin.startR, plan.origin.startC, plan.fp)) || null));
+    const context = bedContextForCell(bed, plan.origin.startR, plan.origin.startC, effectiveZone);
     const pathMeta = isPath ? { pathColor: pathConfig.color || null, pathDesc: pathConfig.desc || null, blockRows: plan.fp.rows, blockCols: plan.fp.cols } : {};
     const instanceId = placeFootprint(
       bed,
@@ -1543,7 +1596,7 @@ const Beds = (() => {
 
     if (selectedPlantId !== '__path__') {
       Store.addLifecycleEvent({
-        seasonYear: currentSeasonYear(),
+        seasonYear: activeSeasonYear(),
         bedId,
         bedName: bed.name,
         bedContextId: context.bedContextId,
@@ -1810,8 +1863,10 @@ const Beds = (() => {
 
     // col labels
     let colLabels = `<div class="bed-col-labels">`;
+    const isTray = isSeedTrayBed(bed);
+    const isPlot = isPlotBed(bed);
     for (let c = 0; c < cols; c++) {
-      colLabels += `<div class="bed-col-lbl" style="width:${cs}px;height:20px">${((c + 1) * CELL_M).toFixed(2)}m</div>`;
+      colLabels += `<div class="bed-col-lbl" style="width:${cs}px;height:20px">${isTray ? (c + 1) : `${((c + 1) * CELL_M).toFixed(2)}m`}</div>`;
     }
     colLabels += `</div>`;
 
@@ -1819,7 +1874,7 @@ const Beds = (() => {
     const pathLabelOverlays = [];
     for (let r = 0; r < rows; r++) {
       rowsHtml += `<div class="bed-row">
-        <div class="bed-row-lbl">${((r + 1) * CELL_M).toFixed(2)}m</div>`;
+        <div class="bed-row-lbl">${isTray ? (r + 1) : `${((r + 1) * CELL_M).toFixed(2)}m`}</div>`;
       for (let c = 0; c < cols; c++) {
         const key    = `${r},${c}`;
         const cell   = normalizeCellValue(bed.cells[key], key);
@@ -1931,22 +1986,30 @@ const Beds = (() => {
     </div>` : '';
 
     return `
-<div class="bed-block" data-id="${bed.id}" id="bedblock-${bed.id}" style="width:fit-content">
+<div class="bed-block${isTray ? ' seed-tray-block' : ''}${isPlot ? ' plot-bed-block' : ''}" data-id="${bed.id}" id="bedblock-${bed.id}" style="width:fit-content">
   <div class="bed-title-bar">
     <input value="${escAttr(bed.name)}" onchange="Beds.renameBed('${bed.id}',this.value)" spellcheck="false">
     <div class="bed-title-actions">
       <div class="bed-title-actions-left">
-        <button class="btn btn-sm" onclick="Beds.togglePlotDraw('${bed.id}')" title="Draw mapped sub-beds on this plot">${plotDrawMode && activeBedId === bed.id ? '🗺️ Plot ON' : '🗺️ Plot'}</button>
+        ${isTray
+          ? '<span class="tray-badge">🪴 Seed Tray</span>'
+          : isPlot
+            ? (plotDrawMode && activeBedId === bed.id
+                ? `<button class="btn btn-sm btn-danger" onclick="Beds.togglePlotDraw('${bed.id}')" title="Exit zone drawing">✕ Done</button>`
+                : `<button class="btn btn-sm" onclick="Beds.startPlotZoneDraw('${bed.id}')" title="Add a sub-bed zone">➕ Add bed</button>`)
+            : ''}
         <button class="btn btn-sm" onclick="Beds.openBedJournal('${bed.id}')" title="Open this bed in Journal tab">📒 Journal</button>
-        <button class="btn btn-sm" onclick="Beds.editBedSize('${bed.id}')" title="Resize bed">⇔ Resize</button>
+        <button class="btn btn-sm" onclick="Beds.editBedSize('${bed.id}')" title="${isTray ? 'Resize tray' : 'Resize bed'}">⇔ Resize</button>
       </div>
       <div class="bed-title-actions-mid">
         <div class="bed-title-size" title="Bed size summary">
-          <span class="bed-size-main">📏 ${bed.widthM}m × ${bed.heightM}m</span>
-          <span class="bed-size-chip">${cols}×${rows} cells @ ${CELL_CM}cm</span>
+          ${isTray
+            ? `<span class="bed-size-main">🪴 ${cols}×${rows} cells</span>`
+            : `<span class="bed-size-main">📏 ${bed.widthM}m × ${bed.heightM}m</span>
+               <span class="bed-size-chip">${cols}×${rows} cells @ ${CELL_CM}cm</span>`}
           <span class="bed-size-chip">${count} plants</span>
-          ${mappedCountText ? `<span class="bed-size-chip">${mappedCountText}</span>` : ''}
-          ${activeZone ? `<span class="bed-size-chip bed-size-chip-active">Editing: ${escHtml(activeZone.name || 'zone')}</span>` : ''}
+          ${!isTray && mappedCountText ? `<span class="bed-size-chip">${mappedCountText}</span>` : ''}
+          ${!isTray && activeZone ? `<span class="bed-size-chip bed-size-chip-active">Editing: ${escHtml(activeZone.name || 'zone')}</span>` : ''}
         </div>
       </div>
       <div class="bed-title-actions-right">
@@ -2361,7 +2424,7 @@ const Beds = (() => {
         const originCell = Object.entries(bed.cells)
           .map(([k, v]) => normalizeCellValue(v, k))
           .find(v => v?.instanceId === instanceId && v?.origin);
-        if (originCell && !originCell.rowBlockMode && !(originCell.rowBatchTotal > 1)) {
+        if (originCell && (originCell.rowBlockMode || originCell.rowBatchTotal > 1)) {
           let rowDetailsContent = '';
           const totalPlants = originCell.rowBlockMode && originCell.rowBlockTotal > 1
             ? originCell.rowBlockTotal
@@ -2456,14 +2519,95 @@ const Beds = (() => {
         <div style="font-size:.68rem;color:var(--text-muted);margin-bottom:6px">${escHtml(germinationHint)}</div>
         <div style="display:flex;gap:6px;align-items:center;max-width:100%">
           <select id="lc-status-select" style="flex:1;min-width:0;font-size:.72rem" onchange="Beds.setLifecycle(this.value)">
-            ${LC_STATES.map(s => {
-              const m = LC_META[s];
-              return `<option value="${s}" ${s===lifecycle?'selected':''}>${m.icon} ${m.label}</option>`;
-            }).join('')}
+            ${(() => {
+              let states = lcStatesForBed(bedId ? Store.getBeds().find(b => b.id === bedId) : null);
+              if (p.plantingMode === 'direct')    states = states.filter(s => s !== 'tray_seeded' && s !== 'transplanted');
+              if (p.plantingMode === 'transplant') states = states.filter(s => s !== 'direct_sow');
+              return states.map(s => {
+                const m = LC_META[s];
+                return `<option value="${s}" ${s===lifecycle?'selected':''}>${m.icon} ${m.label}</option>`;
+              }).join('');
+            })()}
           </select>
         </div>
         ${timelineHtml}
       </div>`;
+    }
+
+    // Planting mode — inline select, always shown for non-path plants
+    let plantingModeHtml = '';
+    if (!p._isPath) {
+      plantingModeHtml = `
+      <div style="margin-top:6px;margin-bottom:6px">
+        <div style="font-size:.62rem;font-weight:800;color:var(--text-muted);margin-bottom:4px">🌱 PREFERRED METHOD</div>
+        <select style="font-size:.75rem" onchange="Beds.setPlantingMode(this.value)">
+          <option value=""         ${!p.plantingMode              ? 'selected' : ''}>Not specified</option>
+          <option value="direct"   ${p.plantingMode === 'direct'   ? 'selected' : ''}>🌰 Direct sow</option>
+          <option value="transplant" ${p.plantingMode === 'transplant' ? 'selected' : ''}>🏺 Transplant (start in tray)</option>
+        </select>
+      </div>`;
+    }
+
+    // Transplant source block (normal beds only, hidden when direct-sow mode)
+    let transplantSourceHtml = '';
+    if (instanceId && bedId && !p._isPath && p.plantingMode !== 'direct') {
+      const currentBed = Store.getBeds().find(b => b.id === bedId);
+      if (currentBed && !isSeedTrayBed(currentBed)) {
+        const originCell = Object.values(currentBed.cells).find(v => v?.instanceId === instanceId && v?.origin);
+        const linkedBedId  = originCell?.transplantSourceBedId      || '';
+        const linkedInstId = originCell?.transplantSourceInstanceId || '';
+
+        // Build candidate groups: keyed by trayId + seedId, counting ready plants
+        const groupMap = new Map(); // key: `trayId::seedId` → { tray, seedId, seed, count }
+        Store.getBeds().filter(b => isSeedTrayBed(b)).forEach(tray => {
+          Object.entries(tray.cells).forEach(([k, v]) => {
+            const cell = normalizeCellValue(v, k);
+            if (!cell?.origin || cell.plantId !== p.id) return;
+            if (!['ready_to_transplant', 'hardened'].includes(cell.lifecycle)) return;
+            const sid = cell.seedId || '';
+            const key = `${tray.id}::${sid}`;
+            if (!groupMap.has(key)) {
+              const seed = sid ? Store.getInventory().find(s => s.id === sid) : null;
+              groupMap.set(key, { tray, seedId: sid, seed, count: 0 });
+            }
+            groupMap.get(key).count += 1;
+          });
+        });
+        const candidates = [...groupMap.entries()].map(([key, g]) => {
+          const parts = [];
+          if (g.seed?.variety) parts.push(g.seed.variety);
+          if (g.seed?.seedTag) parts.push(`#${g.seed.seedTag}`);
+          const slbl = parts.length ? parts.join(' · ') : 'Generic';
+          const plural = g.count === 1 ? 'plant' : 'plants';
+          return { value: key, label: `${escHtml(g.tray.name)} — ${escHtml(slbl)} (${g.count} ${plural} ready)` };
+        });
+
+        const linkedLabel = linkedInstId
+          ? (() => {
+              const srcBed = Store.getBeds().find(b => b.id === linkedBedId);
+              if (!srcBed) return 'Source tray deleted';
+              const srcCell = Object.values(srcBed.cells).find(v => v?.instanceId === linkedInstId && v?.origin);
+              const lc = srcCell ? (LC_META[srcCell.lifecycle] || {}) : {};
+              return `${escHtml(srcBed.name)} · ${lc.icon || ''} ${lc.label || 'transplanted'}`;
+            })()
+          : '';
+
+        transplantSourceHtml = `
+        <div class="transplant-source-block">
+          <div class="ts-header">🏺 Source from tray</div>
+          ${linkedInstId
+            ? `<div class="transplant-source-linked">✅ Linked: ${linkedLabel}</div>
+               <button class="btn btn-secondary btn-sm" style="margin-top:6px;width:100%" onclick="Beds.unlinkTransplantSource()">Unlink</button>`
+            : candidates.length
+              ? `<select id="ts-source-select">
+                   <option value="">— pick a tray seedling —</option>
+                   ${candidates.map(c => `<option value="${c.value}">${c.label}</option>`).join('')}
+                 </select>
+                 <button class="btn btn-primary btn-sm" style="margin-top:4px;width:100%" onclick="Beds.linkTransplantSource()">Link &amp; remove from tray</button>`
+              : `<div style="font-size:.7rem;color:var(--text-muted);padding:4px 0">No tray seedlings ready — advance tray plants to <em>Ready to transplant</em> or <em>Hardened off</em>.</div>`
+          }
+        </div>`;
+      }
     }
 
     // Get seed image if instance has a seed assigned
@@ -2520,8 +2664,10 @@ const Beds = (() => {
       ${bad.length  ? `<div style="margin-top:6px"><div style="font-size:.62rem;font-weight:800;color:#c62828;margin-bottom:4px">❌ AVOID</div>
         <div class="companion-list">${bad.map(q=>`<span class="ctag ctag-bad">${q.emoji} ${escHtml(q.name)}</span>`).join('')}</div></div>` : ''}
       ${pathEditHtml}
-      ${rowDetailsHtml}
       ${lcHtml}
+      ${rowDetailsHtml}
+      ${plantingModeHtml}
+      ${transplantSourceHtml}
       ${!p._isPath ? `<div style="margin-top:10px;padding-top:8px;border-top:1px solid var(--border)">
         <button class="btn btn-secondary btn-sm" onclick="CustomPlants.openEdit('${p.id}')">✏️ Edit plant</button>
       </div>` : ''}
@@ -2604,10 +2750,176 @@ const Beds = (() => {
     Toast.show(seedId ? 'Seed packet linked' : 'Using generic planting');
   }
 
+  function setPlantingMode(value) {
+    if (!lastClickedInstance && !selectedPlantId) return;
+    const plantId = lastClickedInstance
+      ? (() => {
+          const bed = Store.getBeds().find(b => b.id === lastClickedInstance.bedId);
+          const origin = bed ? Object.values(bed.cells).find(v => v?.instanceId === lastClickedInstance.instanceId && v?.origin) : null;
+          return origin?.plantId || selectedPlantId;
+        })()
+      : selectedPlantId;
+    if (!plantId) return;
+    const plant = PlantDB.get(plantId);
+    if (!plant || plant._isPath) return;
+    const mode = value || null;
+    if (plant._custom) {
+      Store.upsertCustomPlant({ ...plant, plantingMode: mode });
+    } else {
+      Store.upsertBuiltinPlantOverride(plantId, { plantingMode: mode });
+    }
+    // Re-render info panel with updated plant data
+    const updated = PlantDB.get(plantId);
+    if (updated) {
+      const instanceId = lastClickedInstance?.instanceId || null;
+      const bedId      = lastClickedInstance?.bedId      || null;
+      showPlantInfo(updated, selectedRotation, instanceId, bedId);
+    }
+  }
+
+  function linkTransplantSource() {
+    if (!lastClickedInstance) return;
+    const sel = document.getElementById('ts-source-select');
+    if (!sel || !sel.value) { Toast.show('Select a tray seedling first'); return; }
+
+    // Value format: `trayBedId::groupSeedId` (groupSeedId is '' for generic)
+    const sepIdx = sel.value.indexOf('::');
+    if (sepIdx === -1) return;
+    const trayBedId      = sel.value.slice(0, sepIdx);
+    const groupSeedId    = sel.value.slice(sepIdx + 2); // '' means generic
+
+    const beds = Store.getBeds();
+    const normalBed = beds.find(b => b.id === lastClickedInstance.bedId);
+    const trayBed   = beds.find(b => b.id === trayBedId);
+    if (!normalBed || !trayBed) return;
+
+    // Find the first tray instance matching the selected group (tray + seedId)
+    let normalPlantId = null;
+    Object.entries(normalBed.cells).forEach(([, v]) => {
+      if (typeof v === 'object' && v?.instanceId === lastClickedInstance.instanceId && v?.origin) {
+        normalPlantId = v.plantId;
+      }
+    });
+    if (!normalPlantId) return;
+
+    let trayInstId = null;
+    Object.entries(trayBed.cells).forEach(([, v]) => {
+      if (trayInstId) return;
+      const cell = typeof v === 'object' ? v : null;
+      if (!cell?.origin || cell.plantId !== normalPlantId) return;
+      if (!['ready_to_transplant', 'hardened'].includes(cell.lifecycle)) return;
+      if ((cell.seedId || '') !== groupSeedId) return;
+      trayInstId = cell.instanceId;
+    });
+    if (!trayInstId) { Toast.show('No matching tray seedling found'); return; }
+
+    // Update normal-bed origin cell: store source refs, advance lifecycle to transplanted
+    let normalSeedId  = null;
+    let normalContext = { bedContextId: normalBed.id, bedContextName: normalBed.name };
+    Object.entries(normalBed.cells).forEach(([k, v]) => {
+      if (typeof v === 'object' && v?.instanceId === lastClickedInstance.instanceId && v?.origin) {
+        normalSeedId  = v.seedId || null;
+        normalContext = contextFromOriginCell(normalBed, normalizeCellValue(v, k), k);
+        normalBed.cells[k] = {
+          ...v,
+          transplantSourceBedId:      trayBedId,
+          transplantSourceInstanceId: trayInstId,
+          lifecycle: 'transplanted',
+        };
+      }
+    });
+
+    // Remove all tray cells belonging to this instance (plant transplanted out)
+    let trayPrevState = 'planned';
+    let trayPlantId   = null;
+    let traySeedId    = null;
+    let trayContext   = { bedContextId: trayBed.id, bedContextName: trayBed.name };
+    Object.entries(trayBed.cells).forEach(([k, v]) => {
+      if (typeof v === 'object' && v?.instanceId === trayInstId) {
+        if (v?.origin) {
+          trayPrevState = v.lifecycle || 'planned';
+          trayPlantId   = v.plantId;
+          traySeedId    = v.seedId || null;
+          trayContext   = contextFromOriginCell(trayBed, normalizeCellValue(v, k), k);
+        }
+        delete trayBed.cells[k];
+      }
+    });
+
+    Store.updateBed(normalBed);
+    Store.updateBed(trayBed);
+
+    const season = activeSeasonYear();
+    Store.addLifecycleEvent({
+      seasonYear: season,
+      bedId: lastClickedInstance.bedId,
+      bedName: normalBed.name,
+      bedContextId: normalContext.bedContextId,
+      bedContextName: normalContext.bedContextName,
+      instanceId: lastClickedInstance.instanceId,
+      plantId: normalPlantId,
+      seedId:  normalSeedId,
+      fromState: 'planned',
+      toState: 'transplanted',
+      action: 'transplant-link',
+      note: `Linked from tray: ${trayBed.name}`,
+      qty: 1,
+    });
+    if (trayPlantId && trayPrevState !== 'transplanted') {
+      Store.addLifecycleEvent({
+        seasonYear: season,
+        bedId: trayBedId,
+        bedName: trayBed.name,
+        bedContextId: trayContext.bedContextId,
+        bedContextName: trayContext.bedContextName,
+        instanceId: trayInstId,
+        plantId: trayPlantId,
+        seedId:  traySeedId,
+        fromState: trayPrevState,
+        toState: 'transplanted',
+        action: 'transplant-link',
+        note: `Transplanted to bed: ${normalBed.name}`,
+        qty: 1,
+      });
+    }
+
+    renderCanvas();
+    renderBedJournal();
+    const plant = PlantDB.get(normalPlantId);
+    if (plant) showPlantInfo(plant, 0, lastClickedInstance.instanceId, lastClickedInstance.bedId);
+    Toast.show('Linked — seedling removed from tray and marked transplanted');
+  }
+
+  function unlinkTransplantSource() {
+    if (!lastClickedInstance) return;
+    const beds = Store.getBeds();
+    const normalBed = beds.find(b => b.id === lastClickedInstance.bedId);
+    if (!normalBed) return;
+
+    let plantId = null;
+    Object.entries(normalBed.cells).forEach(([, v]) => {
+      if (typeof v === 'object' && v?.instanceId === lastClickedInstance.instanceId && v?.origin) {
+        plantId = v.plantId;
+        delete v.transplantSourceBedId;
+        delete v.transplantSourceInstanceId;
+      }
+    });
+    if (!plantId) return;
+
+    Store.updateBed(normalBed);
+    renderCanvas();
+    const plant = PlantDB.get(plantId);
+    if (plant) showPlantInfo(plant, 0, lastClickedInstance.instanceId, lastClickedInstance.bedId);
+    Toast.show('Tray link removed');
+  }
+
   function setLifecycle(state) {
     const targets = getLifecycleTargets();
     if (!targets.length) return;
     const beds = Store.getBeds();
+    // Guard: skip states that are invalid for the target bed type
+    const firstBed = beds.find(b => b.id === targets[0]?.bedId);
+    if (firstBed && !lcStatesForBed(firstBed).includes(state)) return;
     const touched = new Set();
     let changed = 0;
 
@@ -2636,7 +2948,7 @@ const Beds = (() => {
       touched.add(bed.id);
       if (prevState !== state) {
         Store.addLifecycleEvent({
-          seasonYear: currentSeasonYear(),
+          seasonYear: activeSeasonYear(),
           bedId,
           bedName: bed.name,
           bedContextId: context.bedContextId,
@@ -2768,7 +3080,7 @@ const Beds = (() => {
     const filteredContextIds = new Set(filteredContexts.map(ctx => ctx.id));
     const eventsForBeds = allEvents.filter(e => filteredContextIds.has(journalContextId(e)));
     const years = [...new Set(eventsForBeds.map(e => e.seasonYear).filter(Boolean))].sort((a, b) => b - a);
-    const defaultYear = currentSeasonYear();
+    const defaultYear = activeSeasonYear();
     if (!selectedJournalSeason) selectedJournalSeason = defaultYear;
     if (!years.includes(defaultYear)) years.unshift(defaultYear);
 
@@ -2825,7 +3137,8 @@ const Beds = (() => {
         : '';
       const stateTxt = from ? `${from} → ${to}` : to;
       const plantName = plant?.name || e.plantId;
-      const media = renderJournalMedia(e, plant?.emoji || '🌱', `${plantName} journal photo`);
+      const lcIcon = LC_META[e.toState]?.icon || '📋';
+      const media = renderJournalMedia(e, lcIcon, plant?.emoji || '🌱', `${plantName} journal photo`);
       const bedName = isMultiBed ? ` · ${escHtml(journalContextName(e, contexts))}` : '';
       const note = (e.note || '').trim();
       return `<button class="journal-item journal-item-btn" onclick="Beds.openJournalEvent('${e.id}')">
@@ -3158,24 +3471,46 @@ const Beds = (() => {
   }
 
   // ── bed CRUD ──────────────────────────────────────────────────
+  function onBedTypeChange(type) {
+    const isTray = type === 'tray';
+    const isPlot = type === 'plot';
+    document.getElementById('bm-meters-row').style.display  = isTray ? 'none' : '';
+    document.getElementById('bm-tray-row').style.display    = isTray ? ''     : 'none';
+    document.getElementById('bm-hint-meters').style.display = isTray ? 'none' : '';
+    document.getElementById('bm-hint-tray').style.display   = isTray ? ''     : 'none';
+    document.getElementById('bm-hint-plot').style.display   = isPlot ? ''     : 'none';
+  }
+
   function openNewBedModal() {
-    document.getElementById('bm-id').value     = '';
-    document.getElementById('bm-name').value   = '';
-    document.getElementById('bm-width').value  = '1.2';
-    document.getElementById('bm-height').value = '2.4';
-    document.getElementById('bm-title').textContent = '🪴 New Bed';
+    document.getElementById('bm-id').value        = '';
+    document.getElementById('bm-name').value      = '';
+    document.getElementById('bm-width').value     = '1.2';
+    document.getElementById('bm-height').value    = '2.4';
+    document.getElementById('bm-tray-cols').value = '12';
+    document.getElementById('bm-tray-rows').value = '8';
+    document.getElementById('bm-bed-type').value  = 'bed';
+    onBedTypeChange('bed');
+    document.getElementById('bm-title').textContent = '🌿 New Bed';
     Modal.open('bed-modal');
     document.getElementById('bed-modal-save').onclick = () => saveBedModal();
   }
 
   function editBedSize(id) {
-    const bed = Store.getBeds().find(b => b.id === id);
+    const bed  = Store.getBeds().find(b => b.id === id);
     if (!bed) return;
-    document.getElementById('bm-id').value     = bed.id;
-    document.getElementById('bm-name').value   = bed.name;
-    document.getElementById('bm-width').value  = bed.widthM;
-    document.getElementById('bm-height').value = bed.heightM;
-    document.getElementById('bm-title').textContent = '⇔ Resize Bed';
+    const type = bed.type || 'bed';
+    document.getElementById('bm-id').value        = bed.id;
+    document.getElementById('bm-name').value      = bed.name;
+    document.getElementById('bm-width').value     = bed.widthM;
+    document.getElementById('bm-height').value    = bed.heightM;
+    document.getElementById('bm-tray-cols').value = bed.cols;
+    document.getElementById('bm-tray-rows').value = bed.rows;
+    document.getElementById('bm-bed-type').value  = type;
+    onBedTypeChange(type);
+    document.getElementById('bm-title').textContent =
+      type === 'tray' ? '⇔ Resize Seed Tray' :
+      type === 'plot' ? '⇔ Resize Plot' :
+                        '⇔ Resize Bed';
     Modal.open('bed-modal');
     document.getElementById('bed-modal-save').onclick = () => saveBedModal();
   }
@@ -3183,40 +3518,70 @@ const Beds = (() => {
   function saveBedModal() {
     const existId = document.getElementById('bm-id').value;
     const name    = document.getElementById('bm-name').value.trim() || 'My Bed';
-    const widthM  = Math.max(CELL_M, Math.min(15, parseFloat(document.getElementById('bm-width').value)  || 1.2));
-    const heightM = Math.max(CELL_M, Math.min(15, parseFloat(document.getElementById('bm-height').value) || 2.4));
+    const bedType = document.getElementById('bm-bed-type').value; // 'bed' | 'plot' | 'tray'
+    const isTray  = bedType === 'tray';
 
-    if (existId) {
-      // resize existing
-      const beds = Store.getBeds();
-      const bed  = beds.find(b => b.id === existId);
-      if (!bed) return;
-      const newCols = Math.min(MAX_CELLS, Math.max(1, Math.round(widthM  / CELL_M)));
-      const newRows = Math.min(MAX_CELLS, Math.max(1, Math.round(heightM / CELL_M)));
-      // drop cells outside new bounds
-      Object.keys(bed.cells).forEach(k => {
-        const [r, c] = k.split(',').map(Number);
-        if (r >= newRows || c >= newCols) delete bed.cells[k];
-      });
-      // cleanup orphaned chunks when an origin cell was cropped out
-      const aliveOrigins = new Set();
-      Object.entries(bed.cells).forEach(([k, v]) => {
-        const cell = normalizeCellValue(v, k);
-        if (cell?.origin) aliveOrigins.add(cell.instanceId);
-      });
-      Object.entries(bed.cells).forEach(([k, v]) => {
-        const cell = normalizeCellValue(v, k);
-        if (cell && !aliveOrigins.has(cell.instanceId)) delete bed.cells[k];
-      });
-      bed.name = name; bed.widthM = widthM; bed.heightM = heightM;
-      bed.cols = newCols; bed.rows = newRows;
-      Store.updateBed(bed);
-      Toast.show('Bed updated');
+    if (isTray) {
+      const cols = Math.min(MAX_CELLS, Math.max(1, parseInt(document.getElementById('bm-tray-cols').value, 10) || 12));
+      const rows = Math.min(MAX_CELLS, Math.max(1, parseInt(document.getElementById('bm-tray-rows').value, 10) || 8));
+      if (existId) {
+        const beds = Store.getBeds();
+        const bed  = beds.find(b => b.id === existId);
+        if (!bed) return;
+        Object.keys(bed.cells).forEach(k => {
+          const [r, c] = k.split(',').map(Number);
+          if (r >= rows || c >= cols) delete bed.cells[k];
+        });
+        bed.name = name;
+        bed.type = 'tray';
+        delete bed.isSeedTray;
+        bed.cols = cols; bed.rows = rows;
+        bed.widthM  = +(cols * CELL_M).toFixed(2);
+        bed.heightM = +(rows * CELL_M).toFixed(2);
+        Store.updateBed(bed);
+        Toast.show('Seed tray updated');
+      } else {
+        const bed = Store.newSeedTrayBed(name, cols, rows);
+        Store.updateBed(bed);
+        activeBedId = bed.id;
+        Toast.show('New seed tray created');
+      }
     } else {
-      const bed = Store.newBed(name, widthM, heightM);
-      Store.updateBed(bed);
-      activeBedId = bed.id;
-      Toast.show('New bed created');
+      const widthM  = Math.max(CELL_M, Math.min(15, parseFloat(document.getElementById('bm-width').value)  || 1.2));
+      const heightM = Math.max(CELL_M, Math.min(15, parseFloat(document.getElementById('bm-height').value) || 2.4));
+      if (existId) {
+        const beds = Store.getBeds();
+        const bed  = beds.find(b => b.id === existId);
+        if (!bed) return;
+        const newCols = Math.min(MAX_CELLS, Math.max(1, Math.round(widthM  / CELL_M)));
+        const newRows = Math.min(MAX_CELLS, Math.max(1, Math.round(heightM / CELL_M)));
+        Object.keys(bed.cells).forEach(k => {
+          const [r, c] = k.split(',').map(Number);
+          if (r >= newRows || c >= newCols) delete bed.cells[k];
+        });
+        const aliveOrigins = new Set();
+        Object.entries(bed.cells).forEach(([k, v]) => {
+          const cell = normalizeCellValue(v, k);
+          if (cell?.origin) aliveOrigins.add(cell.instanceId);
+        });
+        Object.entries(bed.cells).forEach(([k, v]) => {
+          const cell = normalizeCellValue(v, k);
+          if (cell && !aliveOrigins.has(cell.instanceId)) delete bed.cells[k];
+        });
+        bed.name = name; bed.widthM = widthM; bed.heightM = heightM;
+        bed.cols = newCols; bed.rows = newRows;
+        bed.type = bedType;
+        delete bed.isSeedTray;
+        Store.updateBed(bed);
+        Toast.show(bedType === 'plot' ? 'Plot updated' : 'Bed updated');
+      } else {
+        const bed = bedType === 'plot'
+          ? Store.newPlotBed(name, widthM, heightM)
+          : Store.newBed(name, widthM, heightM);
+        Store.updateBed(bed);
+        activeBedId = bed.id;
+        Toast.show(bedType === 'plot' ? 'New plot created' : 'New bed created');
+      }
     }
     Modal.close('bed-modal');
     renderBedList();
@@ -3389,8 +3754,9 @@ const Beds = (() => {
     cellMouseDown,
     dragStart, dragOver, drop, dragEnd,
     showPlantInfo, updateSelectedPanel, setRowMode,
-    openNewBedModal, editBedSize, renameBed, deleteBed,
-    togglePlotDraw,
+    openNewBedModal, editBedSize, saveBedModal, renameBed, deleteBed, onBedTypeChange,
+    setPlantingMode, linkTransplantSource, unlinkTransplantSource,
+    togglePlotDraw, startPlotZoneDraw,
     selectPlotZone, clearPlotZone, deleteZone,
     zoneMouseDown,
     setPathConfig,

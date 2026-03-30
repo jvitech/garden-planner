@@ -36,7 +36,13 @@ const PlantDB = (() => {
     return BUILTIN_PLANTS.find(p => p.id === id) ?? null;
   }
 
+  let _cache = null;
+  if (typeof window !== 'undefined') {
+    window.addEventListener('gp:data-changed', () => { _cache = null; });
+  }
+
   function all() {
+    if (_cache) return _cache;
     const overrides = Store.getBuiltinPlantOverrides();
     const builtins = BUILTIN_PLANTS.map(p => {
       const ov = overrides[p.id];
@@ -44,7 +50,8 @@ const PlantDB = (() => {
       return withGerminationDefaults(merged);
     });
     const custom = Store.getCustomPlants().map(p => withGerminationDefaults({ ...p, _custom: true }));
-    return [...builtins, ...custom];
+    _cache = [...builtins, ...custom];
+    return _cache;
   }
   function get(id) {
     return all().find(p => p.id === id) ?? null;
@@ -1091,6 +1098,15 @@ const CustomPlants = (() => {
         </div>
       </div>
       <div class="form-row">
+        <label>Preferred planting method</label>
+        <select id="cp-planting-mode">
+          <option value="">Not specified</option>
+          <option value="direct"    ${existing?.plantingMode==='direct'    ?'selected':''}>Direct sow</option>
+          <option value="transplant"${existing?.plantingMode==='transplant'?'selected':''}>Transplant (start in tray)</option>
+        </select>
+        <div class="form-hint">Hint shown in plant details. Does not enforce anything.</div>
+      </div>
+      <div class="form-row">
         <label>Sow months (comma-separated, 1=Jan)</label>
         <input id="cp-sow" type="text" placeholder="e.g. 3,4,5" value="${(existing?.sow??[]).join(',')}">
       </div>
@@ -1184,6 +1200,7 @@ const CustomPlants = (() => {
       notes:        document.getElementById('cp-notes').value.trim(),
       family:       document.getElementById('cp-family').value || null,
       rotationDisabled: document.getElementById('cp-rotation-disabled').checked || false,
+      plantingMode: document.getElementById('cp-planting-mode').value || null,
     };
 
     Store.upsertCustomPlant(plant);
@@ -1225,6 +1242,9 @@ const CustomPlants = (() => {
       good: [...(src.good ?? [])],
       bad:  [...(src.bad  ?? [])],
       notes: src.notes || '',
+      family: src.family || null,
+      rotationDisabled: src.rotationDisabled || false,
+      plantingMode: src.plantingMode || null,
     };
     openModal(cloned);
   }
@@ -1437,6 +1457,15 @@ const BuiltinPlants = (() => {
         </label>
         <div class="form-hint">When checked, no 3-year warning is shown and the rotation chip is hidden.</div>
       </div>
+      <div class="form-row">
+        <label>Preferred planting method</label>
+        <select id="bp-planting-mode">
+          <option value="">Not specified</option>
+          <option value="direct"    ${current.plantingMode==='direct'    ?'selected':''}>Direct sow</option>
+          <option value="transplant"${current.plantingMode==='transplant'?'selected':''}>Transplant (start in tray)</option>
+        </select>
+        <div class="form-hint">Hint shown in plant details. Does not enforce anything.</div>
+      </div>
       <div class="form-row"><label>Sow months</label><input id="bp-sow" type="text" value="${escAttr(toCsv(current.sow))}" placeholder="e.g. 3,4,5"></div>
       <div class="form-row"><label>Transplant months</label><input id="bp-tr" type="text" value="${escAttr(toCsv(current.tr))}" placeholder="e.g. 5,6"></div>
       <div class="form-row"><label>Harvest months</label><input id="bp-harv" type="text" value="${escAttr(toCsv(current.harv))}" placeholder="e.g. 7,8,9"></div>
@@ -1496,6 +1525,7 @@ const BuiltinPlants = (() => {
         germinationDaysMax,
         family: document.getElementById('bp-family').value || null,
         rotationDisabled: document.getElementById('bp-rotation-disabled').checked || false,
+        plantingMode: document.getElementById('bp-planting-mode').value || null,
         sow: parseMon('bp-sow'),
         tr: parseMon('bp-tr'),
         harv: parseMon('bp-harv'),
@@ -1806,7 +1836,7 @@ const StatsView = (() => {
       Object.keys(familyCounts).forEach(fam => families.add(fam));
       const bedPlants = Object.values(plantCounts).reduce((sum, count) => sum + count, 0);
       const bedHarvested = (lifecycleCounts.harvested_once || 0) + (lifecycleCounts.harvested_continuous || 0);
-      const bedFailed = lifecycleCounts.failed || 0;
+      const bedFailed = (lifecycleCounts.failed || 0) + (lifecycleCounts.failed_germination || 0) + (lifecycleCounts.failed_plant || 0);
       const bedAreaM2 = Number(entry.areaM2) || ((Number(entry.widthM) || 0) * (Number(entry.heightM) || 0));
       const bedTotalCells = Number(entry.totalCells) || ((Number(entry.rows) || 0) * (Number(entry.cols) || 0));
       const bedOccupiedCells = Number(entry.occupiedCells) || 0;
@@ -1922,11 +1952,14 @@ const StatsView = (() => {
     const harvestedOnce = sumQty('harvested_once');
     const harvestedContinuous = sumQty('harvested_continuous');
     const harvested = harvestedOnce + harvestedContinuous;
-    const failed = sumQty('failed');
+    const failedGermination = sumQty('failed_germination');
+    const failedPlant = sumQty('failed_plant');
+    const failed = sumQty('failed') + failedGermination + failedPlant; // legacy + new
     const transplanted = sumQty('transplanted');
-    const resolved = harvested + failed;
+    const resolved = harvested + failedPlant + sumQty('failed');
     const harvestRate = resolved ? Math.round((harvested / resolved) * 100) : null;
-    const germinationRate = started ? Math.round((germinated / started) * 100) : null;
+    // germination rate: germinated vs (started + failed_germination)
+    const germinationRate = started ? Math.round((germinated / (started + failedGermination)) * 100) : null;
     const starts = seedEvents
       .filter(event => event.toState === 'direct_sow' || event.toState === 'tray_seeded')
       .slice()

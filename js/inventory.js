@@ -81,17 +81,8 @@ const Inventory = (() => {
     hint.textContent = 'Add a seed tag to use the default photo filename lookup.';
   }
 
-  function currentSeasonYear() {
-    const settings = Store.getSettings();
-    const fromDates = [settings.lastFrost, settings.firstFrost]
-      .filter(Boolean)
-      .map(v => new Date(`${v}T12:00:00`).getFullYear())
-      .find(y => Number.isFinite(y));
-    return fromDates || new Date().getFullYear();
-  }
-
   function seedGerminationStats(seedId) {
-    const year = currentSeasonYear();
+    const year = activeSeasonYear();
     const events = Store.getLifecycleJournal().filter(event => event.seedId === seedId && Number(event.seasonYear) === Number(year));
     const sumQty = state => events
       .filter(event => event.toState === state)
