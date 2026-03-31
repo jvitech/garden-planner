@@ -1411,7 +1411,7 @@ const Beds = (() => {
     }
     if (pathWrap) pathWrap.style.display = 'none';
     const p = PlantDB.get(selectedPlantId);
-    const inv = seedsForPlant(selectedPlantId, true);
+    const inv = seedsForPlant(selectedPlantId, false);
     sel.innerHTML = ['<option value="">Generic (no packet)</option>', ...inv.map(s =>
       `<option value="${s.id}" ${selectedSeedId===s.id?'selected':''}>${escHtml(seedLabel(s))}</option>`
     )].join('');
@@ -2389,7 +2389,7 @@ const Beds = (() => {
         const origin = Object.values(bed.cells).find(v => v?.instanceId === instanceId && v?.origin);
         currentSeedId = origin?.seedId || null;
       }
-      const options = seedsForPlant(p.id, true);
+      const options = seedsForPlant(p.id, false);
       const optHtml = [`<option value="">Generic (no packet)</option>`, ...options.map(s =>
         `<option value="${s.id}" ${currentSeedId===s.id?'selected':''}>${escHtml(seedLabel(s))}</option>`
       )].join('');
@@ -2704,7 +2704,7 @@ const Beds = (() => {
       return;
     }
     const p = PlantDB.get(selectedPlantId);
-    const inv = seedsForPlant(p.id, true);
+    const inv = seedsForPlant(p.id, false);
     const stock = inv.reduce((a, s) => a + (s.qty||0), 0);
     const packetOptions = ['<option value="">Generic (no packet)</option>', ...inv.map(s =>
       `<option value="${s.id}" ${selectedSeedId===s.id?'selected':''}>${escHtml(seedLabel(s))}</option>`
