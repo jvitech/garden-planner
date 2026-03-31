@@ -264,6 +264,17 @@ const Inventory = (() => {
     openModal(Store.getInventory().find(s => s.id === id));
   }
 
+  function nextSeedTag() {
+    const now    = new Date();
+    const prefix = String(now.getFullYear()).slice(2) + String(now.getMonth() + 1).padStart(2, '0');
+    const used   = new Set(Store.getInventory().map(s => s.seedTag));
+    for (let i = 1; i <= 99; i++) {
+      const tag = `${prefix}-${String(i).padStart(2, '0')}`;
+      if (!used.has(tag)) return tag;
+    }
+    return prefix + '-??';
+  }
+
   function openModal(existing) {
     const plants = PlantDB.all();
     const opts   = plants.map(p => `<option value="${p.id}" ${existing?.plantId === p.id ? 'selected' : ''}>${p.emoji} ${escHtml(p.name)}</option>`).join('');
@@ -278,7 +289,7 @@ const Inventory = (() => {
       </div>
       <div class="form-row">
         <label>Seed Tag / ID</label>
-        <input id="im-tag" type="text" placeholder="e.g. 26-01, 2024-TR-3" value="${escAttr(existing?.seedTag||'')}" oninput="Inventory.syncImageHint()">
+        <input id="im-tag" type="text" placeholder="e.g. 2604-00" value="${escAttr(existing?.seedTag || (!existing ? nextSeedTag() : ''))}" oninput="Inventory.syncImageHint()">
         <div class="form-hint">Your reference code for this seed packet (printed on the packet label).</div>
       </div>
       <div class="form-row">
@@ -372,10 +383,16 @@ const Inventory = (() => {
 
     if (!plantId) { alert('Please select a plant.'); return; }
 
+    const seedTag = document.getElementById('im-tag').value.trim();
+    if (seedTag) {
+      const duplicate = Store.getInventory().find(s => s.seedTag === seedTag && s.id !== existId);
+      if (duplicate) { alert(`Seed tag "${seedTag}" is already used by another packet. Please choose a unique ID.`); return; }
+    }
+
     const seed = {
-      id:      existId || ('seed_' + Date.now()),
+      id:      existId || (`seed_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`),
       plantId,
-      seedTag: document.getElementById('im-tag').value.trim(),
+      seedTag,
       imageFilename,
       germinationDaysMin,
       germinationDaysMax,

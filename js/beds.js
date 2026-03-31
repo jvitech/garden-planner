@@ -2899,6 +2899,16 @@ const Beds = (() => {
       }
     });
 
+    // Always inherit the tray seedling's seed — the transplanted plant defines the seed identity.
+    if (traySeedId && traySeedId !== normalSeedId) {
+      Object.entries(normalBed.cells).forEach(([k, v]) => {
+        if (typeof v === 'object' && v?.instanceId === lastClickedInstance.instanceId && v?.origin) {
+          normalBed.cells[k] = { ...normalBed.cells[k], seedId: traySeedId };
+        }
+      });
+      normalSeedId = traySeedId;
+    }
+
     Store.updateBed(normalBed);
     Store.updateBed(trayBed);
 
