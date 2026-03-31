@@ -874,7 +874,7 @@ body {
   line-height: 1; transition: all .12s;
 }
 .qty-btn:hover { background: var(--primary-light); color: #fff; border-color: var(--primary-light); }
-.qty-val { width: 36px; text-align: center; font-weight: 700; font-size: .88rem; }
+.qty-val { width: 50px; text-align: center; font-weight: 700; font-size: .88rem; }
 .qty-val input {
   width: 100%; text-align: center; border: 1px solid var(--border);
   border-radius: 5px; padding: 2px 4px; font-size: .88rem; font-weight: 700;
@@ -965,9 +965,11 @@ body {
   font-size: .62rem; padding: 2px 7px; border-radius: 10px;
   font-weight: 700; text-transform: uppercase;
 }
-.stock-ok   { background: #e8f5e9; color: #2e7d32; }
-.stock-low  { background: #fff3e0; color: #e65100; }
-.stock-none { background: #fce4ec; color: #c62828; }
+.stock-ok     { background: #e8f5e9; color: #2e7d32; }
+.stock-low    { background: #fff3e0; color: #e65100; }
+.stock-none   { background: #fce4ec; color: #c62828; }
+.stock-sealed { background: #e3f2fd; color: #1565c0; }
+.seed-card.sealed-packet { border-color: #42a5f5; box-shadow: 0 0 0 2px #bbdefb; }
 
 /* ================================================================
    CUSTOM PLANT FORM

@@ -123,6 +123,7 @@ const Inventory = (() => {
       if (filterStock === 'instock' && s.qty <= 0) return false;
       if (filterStock === 'low'     && (s.qty > 10 || s.qty <= 0)) return false;
       if (filterStock === 'none'    && s.qty > 0) return false;
+      if (filterStock === 'new'     && !s.sealed) return false;
       if (filterGermination !== 'all' && germinationBucket(germStats.rate) !== filterGermination) return false;
       return true;
     }).slice().sort((a, b) => {
@@ -139,6 +140,7 @@ const Inventory = (() => {
       if (sortBy === 'rating-desc') return bRating - aRating || aName.localeCompare(bName);
       if (sortBy === 'rating-asc') return aRating - bRating || aName.localeCompare(bName);
       if (sortBy === 'qty-desc') return (b.qty || 0) - (a.qty || 0) || aName.localeCompare(bName);
+      if (sortBy === 'tag-asc') return (a.seedTag || '').localeCompare(b.seedTag || '') || aName.localeCompare(bName);
       return aName.localeCompare(bName);
     });
 
@@ -161,6 +163,7 @@ const Inventory = (() => {
     const badgeCls = qty <= 0 ? 'stock-none': qty <= 10 ? 'stock-low' : 'stock-ok';
     const badgeTxt = qty <= 0 ? 'Out of stock' : qty <= 10 ? 'Low stock' : 'In stock';
 
+    const sealedBadge = s.sealed ? `<span class="stock-badge stock-sealed">📦 New</span>` : '';
     const expHtml  = expiryHtml(s.expiry);
     const plantGermMin = parseInt(p?.germinationDaysMin, 10);
     const plantGermMax = parseInt(p?.germinationDaysMax, 10);
@@ -180,7 +183,7 @@ const Inventory = (() => {
     const mediaHtml = renderSeedMedia(s, emoji, name);
 
     return `
-<div class="seed-card ${stockCls}" data-id="${s.id}">
+<div class="seed-card ${stockCls}${s.sealed ? ' sealed-packet' : ''}" data-id="${s.id}">
   <div class="seed-card-head">
     ${mediaHtml}
     <div class="seed-card-title">
@@ -188,6 +191,7 @@ const Inventory = (() => {
       ${s.seedTag  ? `<span class="seed-tag-badge">🏷 ${escHtml(s.seedTag)}</span>` : ''}
       ${s.variety  ? `<div class="seed-card-variety">${escHtml(s.variety)}</div>` : ''}
     </div>
+    ${sealedBadge}
     <span class="stock-badge ${badgeCls}">${badgeTxt}</span>
   </div>
   <div class="seed-qty-row">
@@ -312,10 +316,17 @@ const Inventory = (() => {
         <label>Variety / Label</label>
         <input id="im-variety" type="text" placeholder="e.g. Roma, Brandywine…" value="${escAttr(existing?.variety||'')}">
       </div>
+      <div class="form-row">
+        <label>Packet status</label>
+        <select id="im-sealed">
+          <option value="0" ${!existing?.sealed ? 'selected' : ''}>Opened / in use</option>
+          <option value="1" ${existing?.sealed  ? 'selected' : ''}>New — sealed packet</option>
+        </select>
+      </div>
       <div class="form-row-inline">
         <div class="form-row">
           <label>Quantity *</label>
-          <input id="im-qty" type="number" min="0" value="${existing?.qty ?? 0}">
+          <input id="im-qty" type="number" min="0" value="${existing?.qty ?? (!existing ? 100 : 0)}">
         </div>
         <div class="form-row">
           <label>Unit</label>
@@ -379,9 +390,11 @@ const Inventory = (() => {
       ? Math.max(germinationDaysMin || 0, germinationDaysMaxRaw)
       : (germinationDaysMin !== null ? germinationDaysMin : null);
     const rating = Math.max(0, Math.min(5, parseInt(document.getElementById('im-rating').value, 10) || 0));
+    const sealed = document.getElementById('im-sealed').value === '1';
     const existId = document.getElementById('im-id').value;
 
     if (!plantId) { alert('Please select a plant.'); return; }
+    if (sealed && qty === 0) { alert('A sealed packet cannot have 0 seeds. Either set a quantity or mark it as Opened.'); return; }
 
     const seedTag = document.getElementById('im-tag').value.trim();
     if (seedTag) {
@@ -397,7 +410,7 @@ const Inventory = (() => {
       germinationDaysMin,
       germinationDaysMax,
       rating,
-      qty, unit, variety, expiry, notes,
+      qty, unit, variety, expiry, notes, sealed,
     };
     Store.upsertSeed(seed);
     Modal.close('inv-modal');
@@ -413,7 +426,7 @@ const Inventory = (() => {
   }
 
   function onFilter(val, btn) {
-    filterStock = val;
+    filterStock = ['all', 'instock', 'low', 'none', 'new'].includes(val) ? val : 'all';
     document.querySelectorAll('#inv-filter-tabs .ftab').forEach(t => t.classList.remove('active'));
     btn.classList.add('active');
     render();
@@ -425,7 +438,7 @@ const Inventory = (() => {
   }
 
   function onSortChange(val) {
-    sortBy = ['name-asc', 'germ-desc', 'germ-asc', 'rating-desc', 'rating-asc', 'qty-desc'].includes(val) ? val : 'name-asc';
+    sortBy = ['name-asc', 'tag-asc', 'germ-desc', 'germ-asc', 'rating-desc', 'rating-asc', 'qty-desc'].includes(val) ? val : 'name-asc';
     render();
   }
 

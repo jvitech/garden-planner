@@ -143,6 +143,7 @@
       </select>
       <select style="max-width:180px" onchange="Inventory.onSortChange(this.value)">
         <option value="name-asc">Sort: Name</option>
+        <option value="tag-asc">Sort: Seed ID</option>
         <option value="germ-desc">Sort: Germination high-low</option>
         <option value="germ-asc">Sort: Germination low-high</option>
         <option value="rating-desc">Sort: Rating high-low</option>
@@ -154,6 +155,7 @@
         <button class="ftab"        onclick="Inventory.onFilter('instock',this)">In stock</button>
         <button class="ftab"        onclick="Inventory.onFilter('low',this)">Low (≤10)</button>
         <button class="ftab"        onclick="Inventory.onFilter('none',this)">Out of stock</button>
+        <button class="ftab"        onclick="Inventory.onFilter('new',this)">📦 New</button>
       </div>
       <span style="font-size:.73rem;color:var(--text-muted);margin-left:auto">Placing a plant in a bed automatically deducts 1 seed from inventory.</span>
     </div>
