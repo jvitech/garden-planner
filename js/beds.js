@@ -9,6 +9,8 @@ const Beds = (() => {
   let selectedPlantId = null;    // currently armed plant
   let selectedSeedId = null;     // currently selected seed packet for armed plant
   let selectedRotation = 0;      // 0 or 90 degrees for rectangular plants
+  let selectedViewMonth = null;  // null = Full Year; 1–12 = seasonal month view
+  let armedSeasonalMode = false; // ephemeral: set before placement, stored on origin cell
   let undoStacks   = {};         // bedId → string[]
   let redoStacks   = {};         // bedId → string[]
   let previewEls   = [];         // currently highlighted footprint cells
@@ -260,6 +262,7 @@ const Beds = (() => {
       pathDesc: val.pathDesc || null,
       transplantSourceBedId:      val.transplantSourceBedId      || null,
       transplantSourceInstanceId: val.transplantSourceInstanceId || null,
+      seasonalMode: val.seasonalMode || false,
     };
   }
 
@@ -1198,8 +1201,29 @@ const Beds = (() => {
     updateHint(bedId, r, c, plan.plant, plan.fp, plan.ok, rotation, mode);
   }
 
+  // ── seasonal month view ───────────────────────────────────────
+  function setViewMonth(val) {
+    const parsed = (val === '' || val == null) ? null : parseInt(val, 10);
+    selectedViewMonth = (parsed >= 1 && parsed <= 12) ? parsed : null;
+    const sel = document.getElementById('view-month-select');
+    if (sel) sel.value = selectedViewMonth ?? '';
+    // If "Sow Now" filter is active but month was cleared, reset to "all"
+    if (selectedViewMonth === null) {
+      const catEl = document.querySelector('#bed-lib-filters .ftab.active');
+      if (catEl?.dataset.cat === 'sownow') {
+        document.querySelectorAll('#bed-lib-filters .ftab').forEach(t => t.classList.remove('active'));
+        document.querySelector('#bed-lib-filters .ftab[data-cat="all"]')?.classList.add('active');
+      }
+    }
+    renderLibrary();
+    renderCanvas();
+  }
+
   // ── init ──────────────────────────────────────────────────────
   function init() {
+    selectedViewMonth = new Date().getMonth() + 1;
+    const sel = document.getElementById('view-month-select');
+    if (sel) sel.value = selectedViewMonth;
     renderBedList();
     renderLibrary();
     renderCanvas();
@@ -1285,12 +1309,20 @@ const Beds = (() => {
     
     const plants  = PlantDB.all().filter(p => {
       if (cat === 'custom' && !p._custom)  return false;
-      if (cat !== 'all' && cat !== 'custom' && p.cat !== cat) return false;
+      if (cat === 'sownow') {
+        if (selectedViewMonth === null) return false;
+        const canSow = (p.sow ?? []).includes(selectedViewMonth) || (p.tr ?? []).includes(selectedViewMonth);
+        if (!canSow) return false;
+      } else if (cat !== 'all' && p.cat !== cat) return false;
       if (search && !p.name.toLowerCase().includes(search)) return false;
       if (showSeededOnly && !seedPlantIds.has(p.id)) return false;
       return true;
     });
     const el = document.getElementById('bed-plant-list');
+    if (cat === 'sownow' && selectedViewMonth === null) {
+      el.innerHTML = '<div style="padding:12px;font-size:.78rem;color:var(--text-muted);text-align:center">Select a month in the toolbar to see what to sow now.</div>';
+      return;
+    }
     if (!plants.length) {
       el.innerHTML = '<div style="padding:12px;font-size:.78rem;color:var(--text-muted);text-align:center">No plants found.</div>';
       return;
@@ -1346,6 +1378,7 @@ const Beds = (() => {
     selectedSeedId = null;
     selectedRotation = 0;
     rowPlacementMode = false;
+    armedSeasonalMode = false;
     lastClickedInstance = null;
     lastClickedCell = null;
     selectedLifecycleInstances = [];
@@ -1604,6 +1637,7 @@ const Beds = (() => {
         bedContextId: context.bedContextId,
         bedContextName: context.bedContextName,
         plotZoneId: context.plotZoneId,
+        seasonalMode: (!isPath && armedSeasonalMode) || undefined,
         ...pathMeta,
       }
     );
@@ -1858,6 +1892,7 @@ const Beds = (() => {
         minR: r, maxR: r, minC: c, maxC: c,
         seedId: null,
         lifecycle: 'planned',
+        seasonalMode: false,
       };
       existing.minR = Math.min(existing.minR, r);
       existing.maxR = Math.max(existing.maxR, r);
@@ -1865,6 +1900,7 @@ const Beds = (() => {
       existing.maxC = Math.max(existing.maxC, c);
       if (cell.origin) existing.seedId = cell.seedId || null;
       if (cell.origin) existing.lifecycle = cell.lifecycle || 'planned';
+      if (cell.origin) existing.seasonalMode = cell.seasonalMode || false;
       instanceMeta[cell.instanceId] = existing;
     });
 
@@ -1906,17 +1942,46 @@ const Beds = (() => {
         const isMultiCellPlant = !!(meta && (meta.rows > 1 || meta.cols > 1));
         const showLifecycleStrip = !isMultiCellPlant || (!!meta && r === meta.maxR);
         const showDeleteButton = !!(plant && meta && r === meta.minR && c === meta.maxC);
+
+        // ── Seasonal stage overlay ────────────────────────────────
+        // ── Seasonal stage overlay ────────────────────────────────
+        let seasonalMeta = null;
+        let isDormantCell = false;  // perennial dormant: occupied but dimmed
+        let isAbsentCell  = false;  // annual out-of-season: slot appears free
+        if (selectedViewMonth !== null && plant && !plant._isPath && (meta?.seasonalMode || plant.perennial)) {
+          const stage = getSeasonalStage(plant, selectedViewMonth);
+          if (stage === 'dormant') {
+            if (plant.perennial) {
+              // Perennial is physically in the ground — show dimmed
+              isDormantCell = true;
+              seasonalMeta = SEASONAL_STAGE_META.dormant;
+            } else {
+              // Annual is not here this month — slot looks free for succession planning
+              isAbsentCell = true;
+            }
+          } else {
+            seasonalMeta = SEASONAL_STAGE_META[stage];
+          }
+        }
+
+        // Absent cells look like empty cells — no occupied styling, no rotation tint
+        const effectiveOcc = (plant && !isAbsentCell) ? ' occupied' : '';
+        const effectiveCat = (plant && !isAbsentCell) ? catCls : '';
+        const effectiveRot = (plant && !isAbsentCell) ? rotCls : '';
         const pm     = selectedPlantId ? ' placing-mode' : '';
         const canPl  = !plant ? ' can-place' : '';
         const pathCls = plant?._isPath ? ' gcell-path' : '';
+        const dormantCls = isDormantCell ? ' gcell-dormant' : '';
+        const absentCls  = isAbsentCell  ? ' gcell-seasonal-absent' : '';
         const pathBg = plant?._isPath ? (cell?.pathColor || '#c8a882') : null;
+        const seasonalBg = (seasonalMeta && !pathBg && !isAbsentCell) ? `;background:${seasonalMeta.color}` : '';
         const pathColorStyle = pathBg ? `;background:${pathBg};border-color:${pathBg}` : '';
-        const dragAttrs = (plant && isOrigin)
+        const dragAttrs = (plant && isOrigin && !isAbsentCell)
           ? `draggable="true" ondragstart="Beds.dragStart(event,'${bed.id}',${r},${c})" ondragend="Beds.dragEnd()"`
           : '';
-        rowsHtml += `<div class="gcell${occ}${catCls}${rotCls}${pm}${canPl}${pathCls}"
+        rowsHtml += `<div class="gcell${effectiveOcc}${effectiveCat}${effectiveRot}${pm}${canPl}${pathCls}${dormantCls}${absentCls}"
           ${dragAttrs}
-          style="width:${cs}px;height:${cs}px${pathColorStyle}"
+          style="width:${cs}px;height:${cs}px${pathColorStyle}${seasonalBg}"
           data-bed="${bed.id}" data-r="${r}" data-c="${c}"
           data-instance="${cell?.instanceId || ''}"
           onclick="Beds.cellClick(event,'${bed.id}',${r},${c})"
@@ -1925,7 +1990,7 @@ const Beds = (() => {
           onmouseleave="Beds.cellLeave('${bed.id}')"
           ondragover="Beds.dragOver(event,'${bed.id}',${r},${c})"
           ondrop="Beds.drop(event,'${bed.id}',${r},${c})">`;
-        if (plant && isOrigin) {
+        if (plant && isOrigin && !isAbsentCell) {
           if (plant._isPath) {
             const pathDesc = cell?.pathDesc || '';
             if (pathDesc) {
@@ -1951,13 +2016,23 @@ const Beds = (() => {
               `;
           }
         }
+        // Ghost hint for absent annual: faint emoji so you can tell something is planned
+        if (isAbsentCell && isOrigin) {
+          rowsHtml += `<div class="gcell-absent-ghost" title="${escAttr(plant.name)} — not here this month">${plant.emoji}</div>`;
+        }
         if (showDeleteButton) {
           rowsHtml += `<button class="gcell-del" onclick="Beds.removePlant(event,'${bed.id}',${r},${c})">✕</button>`;
         }
-        if (plant && !plant._isPath && showLifecycleStrip) {
+        if (plant && !plant._isPath && !isAbsentCell && showLifecycleStrip) {
           rowsHtml += `<div class="gcell-lc-strip" style="background:${lcMeta.color}" title="${lcMeta.label}"></div>`;
         }
-        if (plant && !plant._isPath && !hasSeedImage && !isOrigin && isPerimeterCell) {
+        if (seasonalMeta && !isAbsentCell && showLifecycleStrip) {
+          rowsHtml += `<div class="gcell-seasonal-strip" style="background:${seasonalMeta.stripColor}" title="${seasonalMeta.label}"></div>`;
+        }
+        if (seasonalMeta && !isAbsentCell && isOrigin) {
+          rowsHtml += `<div class="gcell-seasonal-badge" title="${seasonalMeta.label}">${seasonalMeta.icon}</div>`;
+        }
+        if (plant && !plant._isPath && !isAbsentCell && !hasSeedImage && !isOrigin && isPerimeterCell) {
           rowsHtml += `<div class="gcell-edge-icon" aria-hidden="true">${plant.emoji}</div>`;
         }
         rowsHtml += `</div>`;
@@ -2691,6 +2766,26 @@ const Beds = (() => {
     `;
   }
 
+  function setArmedSeasonalMode(enabled) {
+    armedSeasonalMode = !!enabled;
+    updateSelectedPanel();
+  }
+
+  function buildSeasonalModeHtml(p) {
+    if (!p || p._isPath) return '';
+    if (p.perennial) {
+      return `<div style="margin-top:6px;font-size:.72rem;color:var(--text-muted);padding:4px 6px;background:#f0faf4;border-radius:6px;border:1px solid #b7e4c7">♾️ Perennial — always shows seasonal stages. Edit plant to change dates.</div>`;
+    }
+    return `
+      <div style="margin-top:6px;padding:6px;border:1px solid var(--border);border-radius:8px;background:#f8fdf9">
+        <label style="display:flex;align-items:center;gap:8px;font-size:.74rem;font-weight:700;cursor:pointer;color:var(--text)">
+          <input type="checkbox" ${armedSeasonalMode ? 'checked' : ''} onchange="Beds.setArmedSeasonalMode(this.checked)">
+          📅 Seasonal mode
+        </label>
+        <div style="margin-top:2px;font-size:.67rem;color:var(--text-muted)">Shows sow/grow/harvest stage by month. Dates come from the plant — edit the plant to change them.</div>
+      </div>`;
+  }
+
   function updateSelectedPanel() {
     const sec  = document.getElementById('bed-info-selected');
     const el   = document.getElementById('bed-info-selected-content');
@@ -2737,6 +2832,7 @@ const Beds = (() => {
         📦 ${stock > 0 ? `${stock} ${inv[0]?.unit??'seeds'} in stock — 1 deducted per placement` : 'No seeds in inventory (will still place)'}
       </div>
       ${rowModeHtml}
+      ${buildSeasonalModeHtml(p)}
       ${editPlantBtn}`;
 
     // Keep Plant Details synced with currently armed plant.
@@ -3881,6 +3977,7 @@ const Beds = (() => {
     updateSelectedPathMeta,
     promptRenameBed,
     undo, redo, updateStats,
+    setViewMonth, setArmedSeasonalMode,
     setLifecycle, setArmedSeed, setInstanceSeed, setJournalSeason, setJournalBedFilter, setJournalSearch, openJournalEvent,
     handleJournalImageLoad, handleJournalImageError, handleCellImageLoad, handleCellImageError, handlePlantSeedImageLoad, handlePlantSeedImageError, openJournalImage, setJournalPhotoFilename,
     previewJournalImageFile, usePickedJournalFilename, syncJournalImageHint,

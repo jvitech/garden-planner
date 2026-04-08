@@ -695,6 +695,50 @@ body {
   z-index: 3;
 }
 
+/* Seasonal stage strip — sits above the lifecycle strip when month view is active */
+.gcell-seasonal-strip {
+  position: absolute;
+  bottom: 6px; left: 0; right: 0;
+  height: 4px;
+  pointer-events: none;
+  border-top: 1px solid rgba(0,0,0,.12);
+  z-index: 4;
+}
+
+/* Dormant cells (perennials) are dimmed — plant is in ground but inactive */
+.gcell.gcell-dormant { opacity: 0.42; }
+
+/* Absent cells (seasonal annuals out of season) look like empty slots */
+.gcell.gcell-seasonal-absent {
+  background: var(--cell-bg, #e8f5e9) !important;
+  border-color: var(--cell-border, #a5d6a7) !important;
+  cursor: default;
+}
+.gcell.gcell-seasonal-absent:hover { background: var(--cell-hover, #c8e6c9) !important; }
+
+/* Ghost emoji hint — faint, shows something is planned here */
+.gcell-absent-ghost {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1rem;
+  opacity: 0.18;
+  pointer-events: none;
+  z-index: 2;
+}
+
+/* Small seasonal stage icon badge in the top-left corner of origin cells */
+.gcell-seasonal-badge {
+  position: absolute;
+  top: 1px; left: 2px;
+  font-size: .62rem;
+  line-height: 1;
+  pointer-events: none;
+  z-index: 6;
+}
+
 /* Density badge shown when multiple plants fit in one 10×10 cm cell */
 .gcell-density {
   font-size: .5rem;
@@ -1552,6 +1596,9 @@ body {
   body.print-beds .gcell.occupied {
     background: #f3f3f3 !important;
   }
+  body.print-beds .gcell.gcell-dormant { opacity: 1; }
+  body.print-beds .gcell-seasonal-strip,
+  body.print-beds .gcell-seasonal-badge { display: none; }
   body.print-beds .gcell-del,
   body.print-beds .placement-hint {
     display: none !important;

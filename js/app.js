@@ -150,6 +150,63 @@ function inOutdoorWindow(month, settings) {
   if (!lf || !ff) return true;
   return month >= lf && month <= ff;
 }
+
+// ── Seasonal stage computation ───────────────────────────────────────────────
+const SEASONAL_STAGE_META = {
+  perennial:     { label: 'Perennial (active)',   icon: '♾️',  color: '#d8f3dc', stripColor: '#52b788' },
+  sowing:        { label: 'Sowing time',          icon: '🌰',  color: '#fff8e1', stripColor: '#c08a10' },
+  transplanting: { label: 'Transplant time',      icon: '🌱',  color: '#e3f2fd', stripColor: '#1a6fa8' },
+  growing:       { label: 'Growing',              icon: '🌿',  color: '#ccf5d8', stripColor: '#43aa8b' },
+  harvesting:    { label: 'Harvest time',         icon: '🌾',  color: '#e8f5e9', stripColor: '#2d7a40' },
+  dormant:       { label: 'Dormant / out of season', icon: '💤', color: '#eeeeee', stripColor: '#9daab5' },
+};
+
+/**
+ * Returns the seasonal stage of a plant for a given 1-based month.
+ * For perennials, checks plant.dormant array; otherwise active year-round.
+ * For annuals, deduces 'growing' by pairing each sow/tr month with its next
+ * harvest month — handles multi-window plants (e.g. carrot) correctly.
+ * @param {object} plant - full plant object from PlantDB
+ * @param {number} month - 1–12
+ * @returns {'perennial'|'sowing'|'transplanting'|'growing'|'harvesting'|'dormant'}
+ */
+function getSeasonalStage(plant, month) {
+  if (!plant || plant._isPath) return 'dormant';
+  if (plant.perennial) {
+    const dormant = plant.dormant ?? [];
+    return dormant.includes(month) ? 'dormant' : 'perennial';
+  }
+  const sow  = plant.sow  ?? [];
+  const tr   = plant.tr   ?? [];
+  const harv = plant.harv ?? [];
+  if (harv.includes(month))  return 'harvesting';
+  if (tr.includes(month))    return 'transplanting';
+  if (sow.includes(month))   return 'sowing';
+
+  // Deduce 'growing': for each sow/tr month s, find the next harvest month h
+  // after s. If the current month falls in the gap (s, h), it's growing.
+  // Handles wrap-around (e.g. garlic: sow Oct→ harv Jun) only when no harvest
+  // exists in the same year after s.
+  const sowTr = [...new Set([...sow, ...tr])];
+  if (sowTr.length === 0 || harv.length === 0) return 'dormant';
+
+  const harvSorted = [...harv].sort((a, b) => a - b);
+
+  for (const s of sowTr) {
+    // Harvest months that come after s in the same calendar year
+    const nextHarv = harvSorted.find(h => h > s);
+    if (nextHarv !== undefined) {
+      if (month > s && month < nextHarv) return 'growing';
+    } else {
+      // No harvest later in the year — wrap-around season (e.g. garlic)
+      // Growing = after s through end of year, OR from Jan up to first harv
+      const wrapHarv = harvSorted[0];
+      if (month > s || month < wrapHarv) return 'growing';
+    }
+  }
+  return 'dormant';
+}
+
 function activeSeasonYear() {
   const settings = Store.getSettings();
   const fromDates = [settings.lastFrost, settings.firstFrost]
@@ -1126,6 +1183,18 @@ const CustomPlants = (() => {
         <div class="form-hint">Hint shown in plant details. Does not enforce anything.</div>
       </div>
       <div class="form-row">
+        <label style="flex-direction:row;align-items:center;gap:8px;font-size:.78rem;text-transform:none;cursor:pointer">
+          <input id="cp-perennial" type="checkbox" ${existing?.perennial ? 'checked' : ''} onchange="document.getElementById('cp-dormant-row').style.display=this.checked?'':'none'">
+          Perennial (lives multiple years)
+        </label>
+        <div class="form-hint">Perennials show as always-active in seasonal view, except during their dormant months.</div>
+      </div>
+      <div class="form-row" id="cp-dormant-row" style="display:${existing?.perennial ? '' : 'none'}">
+        <label>Dormant months (comma-separated, 1=Jan)</label>
+        <input id="cp-dormant" type="text" placeholder="e.g. 11,12,1,2" value="${(existing?.dormant??[]).join(',')}">
+        <div class="form-hint">Months when the plant is dormant. Leave empty for year-round activity.</div>
+      </div>
+      <div class="form-row">
         <label>Sow months (comma-separated, 1=Jan)</label>
         <input id="cp-sow" type="text" placeholder="e.g. 3,4,5" value="${(existing?.sow??[]).join(',')}">
       </div>
@@ -1211,6 +1280,8 @@ const CustomPlants = (() => {
       daysToHarvest:document.getElementById('cp-days').value.trim() || '?',
       germinationDaysMin,
       germinationDaysMax,
+      perennial:    document.getElementById('cp-perennial').checked || false,
+      dormant:      parseMon('cp-dormant'),
       sow:          parseMon('cp-sow'),
       tr:           parseMon('cp-tr'),
       harv:         parseMon('cp-harv'),
@@ -1255,6 +1326,8 @@ const CustomPlants = (() => {
       daysToHarvest: src.daysToHarvest || '',
       germinationDaysMin: src.germinationDaysMin ?? null,
       germinationDaysMax: src.germinationDaysMax ?? null,
+      perennial: src.perennial || false,
+      dormant: [...(src.dormant ?? [])],
       sow:  [...(src.sow  ?? [])],
       tr:   src.tr ? [...src.tr] : [],
       harv: [...(src.harv ?? [])],
@@ -1485,6 +1558,18 @@ const BuiltinPlants = (() => {
         </select>
         <div class="form-hint">Hint shown in plant details. Does not enforce anything.</div>
       </div>
+      <div class="form-row">
+        <label style="flex-direction:row;align-items:center;gap:8px;font-size:.78rem;text-transform:none;cursor:pointer">
+          <input id="bp-perennial" type="checkbox" ${current.perennial ? 'checked' : ''} onchange="document.getElementById('bp-dormant-row').style.display=this.checked?'':'none'">
+          Perennial (lives multiple years)
+        </label>
+        <div class="form-hint">Perennials show as always-active in seasonal view, except during their dormant months.</div>
+      </div>
+      <div class="form-row" id="bp-dormant-row" style="display:${current.perennial ? '' : 'none'}">
+        <label>Dormant months (comma-separated, 1=Jan)</label>
+        <input id="bp-dormant" type="text" placeholder="e.g. 11,12,1,2" value="${escAttr(toCsv(current.dormant))}">
+        <div class="form-hint">Months when the plant is dormant. Leave empty for year-round activity.</div>
+      </div>
       <div class="form-row"><label>Sow months</label><input id="bp-sow" type="text" value="${escAttr(toCsv(current.sow))}" placeholder="e.g. 3,4,5"></div>
       <div class="form-row"><label>Transplant months</label><input id="bp-tr" type="text" value="${escAttr(toCsv(current.tr))}" placeholder="e.g. 5,6"></div>
       <div class="form-row"><label>Harvest months</label><input id="bp-harv" type="text" value="${escAttr(toCsv(current.harv))}" placeholder="e.g. 7,8,9"></div>
@@ -1545,6 +1630,8 @@ const BuiltinPlants = (() => {
         family: document.getElementById('bp-family').value || null,
         rotationDisabled: document.getElementById('bp-rotation-disabled').checked || false,
         plantingMode: document.getElementById('bp-planting-mode').value || null,
+        perennial: document.getElementById('bp-perennial').checked || false,
+        dormant: parseMon('bp-dormant'),
         sow: parseMon('bp-sow'),
         tr: parseMon('bp-tr'),
         harv: parseMon('bp-harv'),

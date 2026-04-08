@@ -53,6 +53,7 @@
         <button class="ftab"        data-cat="flower"    onclick="setLibCat(this)">🌸</button>
         <button class="ftab"        data-cat="infrastructure" onclick="setLibCat(this)">🛤️</button>
         <button class="ftab"        data-cat="custom"         onclick="setLibCat(this)">✏️</button>
+        <button class="ftab"        data-cat="sownow"         onclick="setLibCat(this)" title="Show plants you can sow or transplant in the selected month">🌱 Sow</button>
       </div>
       <div style="flex-shrink:0;padding:8px;border-bottom:1px solid var(--border);font-size:.74rem">
         <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
@@ -74,6 +75,23 @@
           <label>Color</label><input id="path-config-color" type="color" value="#c8a882" oninput="Beds.setPathConfig('color',this.value)" title="Path colour">
           <label>Label</label><input id="path-config-desc" type="text" maxlength="40" placeholder="optional label…" style="width:120px" oninput="Beds.setPathConfig('desc',this.value)" title="Description shown on the tile">
         </div>
+        <div class="toolbar-sep"></div>
+        <label style="font-size:.74rem;color:var(--text-muted)">📅 View:</label>
+        <select id="view-month-select" onchange="Beds.setViewMonth(this.value)" style="font-size:.76rem" title="Seasonal view: select a month to see plant stages">
+          <option value="">Full Year</option>
+          <option value="1">January</option>
+          <option value="2">February</option>
+          <option value="3">March</option>
+          <option value="4">April</option>
+          <option value="5">May</option>
+          <option value="6">June</option>
+          <option value="7">July</option>
+          <option value="8">August</option>
+          <option value="9">September</option>
+          <option value="10">October</option>
+          <option value="11">November</option>
+          <option value="12">December</option>
+        </select>
         <div class="toolbar-sep"></div>
         <button id="rotate-selection-btn" class="btn btn-secondary" style="font-size:.76rem" onclick="Beds.rotateSelection()" title="Rotate rectangular footprint (R)" disabled>⤾ Rotate <span id="rotationLabel">0°</span></button>
         <button class="btn btn-secondary" style="font-size:.76rem" onclick="Beds.undo()" title="Ctrl+Z">↩ Undo</button>
@@ -124,6 +142,14 @@
                   <div class="legend-item"><div class="ld" style="background:#d9a441"></div>✂️ Harvesting continuous</div>
                   <div class="legend-item"><div class="ld" style="background:#111111"></div>🌾 Gone to seed</div>
                   <div class="legend-item"><div class="ld" style="background:#d7263d"></div>✗ Failed</div>
+            <div style="margin-top:8px;font-size:.68rem;font-weight:800;color:var(--text-muted);text-transform:uppercase">Seasonal view (top strip + tint)</div>
+            <div class="legend-item"><div class="ld" style="background:#d8f3dc;border:2px solid #52b788"></div>♾️ Perennial (active)</div>
+            <div class="legend-item"><div class="ld" style="background:#fff8e1;border:2px solid #c08a10"></div>🌰 Sowing time</div>
+            <div class="legend-item"><div class="ld" style="background:#e3f2fd;border:2px solid #1a6fa8"></div>🌱 Transplant time</div>
+            <div class="legend-item"><div class="ld" style="background:#ccf5d8;border:2px solid #43aa8b"></div>🌿 Growing</div>
+            <div class="legend-item"><div class="ld" style="background:#e8f5e9;border:2px solid #2d7a40"></div>🌾 Harvest time</div>
+            <div class="legend-item"><div class="ld" style="background:#eeeeee;border:2px solid #9daab5"></div>💤 Dormant — perennial, in ground (dimmed)</div>
+            <div class="legend-item"><div class="ld" style="background:#e8f5e9;border:1px solid #a5d6a7"></div>🌫️ Not here this month — free for succession</div>
         </div>
       </div>
 
