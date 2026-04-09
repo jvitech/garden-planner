@@ -50,13 +50,14 @@ const Store = (() => {
     const cols = Math.max(1, Math.round(widthM  / 0.1));
     const rows = Math.max(1, Math.round(heightM / 0.1));
     return {
-      id:      'bed_' + Date.now(),
-      name:    name || 'New Bed',
-      type:    'bed',
-      widthM:  +widthM,
-      heightM: +heightM,
+      id:               'bed_' + Date.now(),
+      name:             name || 'New Bed',
+      type:             'bed',
+      widthM:           +widthM,
+      heightM:          +heightM,
       cols, rows,
-      cells: {},
+      cells:            {},
+      successionCells:  {},
     };
   }
 
@@ -64,13 +65,14 @@ const Store = (() => {
     const cols = Math.max(1, Math.round(widthM  / 0.1));
     const rows = Math.max(1, Math.round(heightM / 0.1));
     return {
-      id:      'bed_' + Date.now(),
-      name:    name || 'New Plot',
-      type:    'plot',
-      widthM:  +widthM,
-      heightM: +heightM,
+      id:               'bed_' + Date.now(),
+      name:             name || 'New Plot',
+      type:             'plot',
+      widthM:           +widthM,
+      heightM:          +heightM,
       cols, rows,
-      cells: {},
+      cells:            {},
+      successionCells:  {},
     };
   }
 
@@ -78,14 +80,15 @@ const Store = (() => {
     const safeCols = Math.max(1, Math.round(cols));
     const safeRows = Math.max(1, Math.round(rows));
     return {
-      id:        'bed_' + Date.now(),
-      name:      name || 'New Tray',
-      type:      'tray',
-      widthM:    +(safeCols * 0.1).toFixed(2),
-      heightM:   +(safeRows * 0.1).toFixed(2),
-      cols:      safeCols,
-      rows:      safeRows,
-      cells: {},
+      id:               'bed_' + Date.now(),
+      name:             name || 'New Tray',
+      type:             'tray',
+      widthM:           +(safeCols * 0.1).toFixed(2),
+      heightM:          +(safeRows * 0.1).toFixed(2),
+      cols:             safeCols,
+      rows:             safeRows,
+      cells:            {},
+      successionCells:  {},
     };
   }
 

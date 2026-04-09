@@ -330,20 +330,39 @@ const Beds = (() => {
     return count;
   }
 
+  // Returns true if the cell is an annual seasonal plant that is absent this month (slot appears free)
+  function isCellAbsent(cell, plant) {
+    if (!cell || !plant || plant._isPath) return false;
+    if (selectedViewMonth === null) return false;
+    if (plant.perennial) return false; // perennial is dormant-but-present, not absent
+    if (!cell.seasonalMode) return false;
+    return getSeasonalStage(plant, selectedViewMonth) === 'dormant';
+  }
+
   function canPlaceFootprint(bed, startR, startC, footprint, ignoreInstanceId = null) {
     if (startR + footprint.rows > bed.rows || startC + footprint.cols > bed.cols) return false;
     for (let rr = startR; rr < startR + footprint.rows; rr++) {
       for (let cc = startC; cc < startC + footprint.cols; cc++) {
-        const occupied = normalizeCellValue(bed.cells[`${rr},${cc}`], `${rr},${cc}`);
+        const key = `${rr},${cc}`;
+        const occupied = normalizeCellValue(bed.cells[key], key);
         // Never allow placing on path cells
         if (occupied?.plantId === '__path__') return false;
-        if (occupied && occupied.instanceId !== ignoreInstanceId) return false;
+        if (occupied && occupied.instanceId !== ignoreInstanceId) {
+          // Absent annual cell: allow placement if succession slot is free
+          if (isCellAbsent(occupied, PlantDB.get(occupied.plantId))) {
+            const succOccupied = normalizeCellValue((bed.successionCells || {})[key], key);
+            if (!succOccupied) continue; // succession slot free → allow
+          }
+          return false;
+        }
       }
     }
     return true;
   }
 
-  function placeFootprint(bed, r, c, plantId, footprint, rotation = 0, instanceId = `inst_${Date.now()}_${Math.random().toString(36).slice(2,7)}`, seedId = null, extraMeta = null) {
+  function placeFootprint(bed, r, c, plantId, footprint, rotation = 0, instanceId = `inst_${Date.now()}_${Math.random().toString(36).slice(2,7)}`, seedId = null, extraMeta = null, inSuccession = false) {
+    if (inSuccession && !bed.successionCells) bed.successionCells = {};
+    const targetCells = inSuccession ? bed.successionCells : bed.cells;
     for (let rr = r; rr < r + footprint.rows; rr++) {
       for (let cc = c; cc < c + footprint.cols; cc++) {
         const isOrigin = rr === r && cc === c;
@@ -352,20 +371,49 @@ const Beds = (() => {
           cellVal.lifecycle = 'planned';
           cellVal.seedId = seedId || null;
         }
-        bed.cells[`${rr},${cc}`] = cellVal;
+        targetCells[`${rr},${cc}`] = cellVal;
       }
     }
     return instanceId;
   }
 
   function removePlantInstance(bed, r, c) {
-    const clicked = normalizeCellValue(bed.cells[`${r},${c}`], `${r},${c}`);
+    const key = `${r},${c}`;
+    // If there's a succession plant at this position, remove it instead of the absent primary
+    const succCell = normalizeCellValue((bed.successionCells || {})[key], key);
+    if (succCell) {
+      const succId = succCell.instanceId;
+      Object.keys(bed.successionCells).forEach(k => {
+        const sc = normalizeCellValue(bed.successionCells[k], k);
+        if (sc?.instanceId === succId) delete bed.successionCells[k];
+      });
+      return true;
+    }
+    const clicked = normalizeCellValue(bed.cells[key], key);
     if (!clicked) return false;
+    const instanceId = clicked.instanceId;
     Object.entries(bed.cells).forEach(([k, v]) => {
       const cell = normalizeCellValue(v, k);
-      if (cell?.instanceId === clicked.instanceId) delete bed.cells[k];
+      if (cell?.instanceId === instanceId) {
+        delete bed.cells[k];
+        // Clean up any succession plant sharing this cell
+        if (bed.successionCells?.[k]) delete bed.successionCells[k];
+      }
     });
     return true;
+  }
+
+  // Returns true if any cell in the footprint is an absent seasonal annual — meaning we should
+  // write the new plant into successionCells rather than the primary cells layer.
+  function shouldPlaceAsSuccession(bed, startR, startC, footprint) {
+    for (let rr = startR; rr < startR + footprint.rows; rr++) {
+      for (let cc = startC; cc < startC + footprint.cols; cc++) {
+        const key = `${rr},${cc}`;
+        const cell = normalizeCellValue(bed.cells[key], key);
+        if (cell && isCellAbsent(cell, PlantDB.get(cell.plantId))) return true;
+      }
+    }
+    return false;
   }
 
   function clearPreview() {
@@ -977,6 +1025,7 @@ const Beds = (() => {
     const rowBatchId = `row_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
 
     const context = bedContextForCell(bed, rect.minR, rect.minC, contextZone);
+    const inSuccessionRow = shouldPlaceAsSuccession(bed, rect.minR, rect.minC, blockFp);
     const instanceId = placeFootprint(
       bed,
       rect.minR,
@@ -998,7 +1047,9 @@ const Beds = (() => {
         bedContextId: context.bedContextId,
         bedContextName: context.bedContextName,
         plotZoneId: context.plotZoneId,
-      }
+        seasonalMode: armedSeasonalMode || undefined,
+      },
+      inSuccessionRow
     );
 
     if (selectedPlantId !== '__path__') {
@@ -1039,6 +1090,18 @@ const Beds = (() => {
 
   function clearInstanceFocus() {
     document.querySelectorAll('.gcell.instance-focus').forEach(el => el.classList.remove('instance-focus'));
+  }
+
+  function syncLegendVisibility() {
+    const legend = document.getElementById('bed-info-legend');
+    if (!legend) return;
+    const hide = !!(selectedPlantId || lastClickedInstance);
+    legend.style.display = hide ? 'none' : '';
+  }
+
+  function syncArmedPanelVisibility(hide) {
+    const sec = document.getElementById('bed-info-selected');
+    if (sec) sec.style.display = hide ? 'none' : '';
   }
 
   function targetKey(target) {
@@ -1217,6 +1280,25 @@ const Beds = (() => {
     }
     renderLibrary();
     renderCanvas();
+    // Refresh details panel so the seasonal stage block reflects the new month
+    if (lastClickedInstance) {
+      const beds = Store.getBeds();
+      const bed = beds.find(b => b.id === lastClickedInstance.bedId);
+      const origin = bed
+        ? (Object.values(bed.cells).find(v => v?.instanceId === lastClickedInstance.instanceId && v?.origin)
+           || Object.values(bed.successionCells || {}).find(v => v?.instanceId === lastClickedInstance.instanceId && v?.origin))
+        : null;
+      if (origin) showPlantInfo(PlantDB.get(origin.plantId), origin.rotation || 0, lastClickedInstance.instanceId, lastClickedInstance.bedId);
+    } else if (selectedPlantId) {
+      updateSelectedPanel();
+    }
+  }
+
+  function stepViewMonth(delta) {
+    // If no month is selected, start from January (delta=1) or December (delta=-1)
+    const current = selectedViewMonth ?? (delta > 0 ? 0 : 13);
+    const next = ((current - 1 + delta + 12) % 12) + 1;
+    setViewMonth(next);
   }
 
   // ── init ──────────────────────────────────────────────────────
@@ -1355,6 +1437,11 @@ const Beds = (() => {
     ignoreNextClick = false;
     selectedPlantId = (selectedPlantId === id) ? null : id;
     if (selectedPlantId) {
+      // Clear any bed-plant selection so Plant Details shows the armed plant cleanly
+      selectedLifecycleInstances = [];
+      lastClickedInstance = null;
+      lastClickedCell = null;
+      clearInstanceFocus();
       rowPlacementMode = false;
       const plant = PlantDB.get(selectedPlantId);
       if (!isRotatable(plant)) selectedRotation = 0;
@@ -1624,6 +1711,7 @@ const Beds = (() => {
     const effectiveZone = bedIsTray ? null : (zone || (plotLayoutForBed(bed).find(item => zoneContainsFootprint(item, plan.origin.startR, plan.origin.startC, plan.fp)) || null));
     const context = bedContextForCell(bed, plan.origin.startR, plan.origin.startC, effectiveZone);
     const pathMeta = isPath ? { pathColor: pathConfig.color || null, pathDesc: pathConfig.desc || null, blockRows: plan.fp.rows, blockCols: plan.fp.cols } : {};
+    const inSuccession = !isPath && shouldPlaceAsSuccession(bed, plan.origin.startR, plan.origin.startC, plan.fp);
     const instanceId = placeFootprint(
       bed,
       plan.origin.startR,
@@ -1639,7 +1727,8 @@ const Beds = (() => {
         plotZoneId: context.plotZoneId,
         seasonalMode: (!isPath && armedSeasonalMode) || undefined,
         ...pathMeta,
-      }
+      },
+      inSuccession
     );
 
     if (selectedPlantId !== '__path__') {
@@ -1911,6 +2000,34 @@ const Beds = (() => {
       meta.rows = (meta.maxR - meta.minR) + 1;
     });
 
+    // Succession layer — parallel to instanceMeta but for bed.successionCells
+    const succInstanceMeta = {};
+    Object.entries(bed.successionCells || {}).forEach(([key, val]) => {
+      const cell = normalizeCellValue(val, key);
+      if (!cell) return;
+      const [r, c] = key.split(',').map(Number);
+      const existing = succInstanceMeta[cell.instanceId] || {
+        minR: r, maxR: r, minC: c, maxC: c,
+        seedId: null,
+        lifecycle: 'planned',
+        seasonalMode: false,
+      };
+      existing.minR = Math.min(existing.minR, r);
+      existing.maxR = Math.max(existing.maxR, r);
+      existing.minC = Math.min(existing.minC, c);
+      existing.maxC = Math.max(existing.maxC, c);
+      if (cell.origin) existing.seedId = cell.seedId || null;
+      if (cell.origin) existing.lifecycle = cell.lifecycle || 'planned';
+      if (cell.origin) existing.seasonalMode = cell.seasonalMode || false;
+      succInstanceMeta[cell.instanceId] = existing;
+    });
+    Object.values(succInstanceMeta).forEach(meta => {
+      const seed = meta.seedId ? invById.get(meta.seedId) : null;
+      meta.imageSources = seedImageSources(seed);
+      meta.cols = (meta.maxC - meta.minC) + 1;
+      meta.rows = (meta.maxR - meta.minR) + 1;
+    });
+
     // col labels
     let colLabels = `<div class="bed-col-labels">`;
     const isTray = isSeedTrayBed(bed);
@@ -1964,38 +2081,61 @@ const Beds = (() => {
           }
         }
 
+        // ── Succession overlay: if this cell is absent, check for a succession plant ──────
+        const succRawCell = (bed.successionCells || {})[key];
+        const succCell    = succRawCell ? normalizeCellValue(succRawCell, key) : null;
+        const succPlant   = succCell ? PlantDB.get(succCell.plantId) : null;
+        const succMeta    = succCell ? succInstanceMeta[succCell.instanceId] : null;
+        // When an absent cell has a succession plant, use the succession data for display
+        // hasSuccession: true when a succession plant should be displayed at this cell.
+        // This applies to ANY cell in the succession footprint where the primary slot is
+        // either absent (seasonal annual out-of-season) or simply empty — covering the case
+        // where a larger succession plant spans cells that have no primary plant at all.
+        const primaryIsAbsentOrEmpty = !plant || isAbsentCell;
+        const hasSuccession = selectedViewMonth !== null && !!succPlant && primaryIsAbsentOrEmpty;
+        const displayCell     = hasSuccession ? succCell  : cell;
+        const displayPlant    = hasSuccession ? succPlant : plant;
+        const displayMeta     = hasSuccession ? succMeta  : meta;
+        const displayIsOrigin = hasSuccession ? !!succCell.origin : isOrigin;
+        const displayRg       = displayPlant && !displayPlant._isPath ? rotationGroup(displayPlant) : null;
+        const displayIsPerimeterCell = !!(displayMeta && (r === displayMeta.minR || r === displayMeta.maxR || c === displayMeta.minC || c === displayMeta.maxC));
+
         // Absent cells look like empty cells — no occupied styling, no rotation tint
-        const effectiveOcc = (plant && !isAbsentCell) ? ' occupied' : '';
-        const effectiveCat = (plant && !isAbsentCell) ? catCls : '';
-        const effectiveRot = (plant && !isAbsentCell) ? rotCls : '';
+        // (unless a succession plant is present, in which case it looks occupied by succession)
+        const effectiveOcc = (displayPlant && !isAbsentCell) || hasSuccession ? ' occupied' : '';
+        const effectiveCat = (displayPlant && (!isAbsentCell || hasSuccession)) ? ` cat-${displayPlant._isPath ? 'path' : (displayPlant.cat || 'other')}` : '';
+        const effectiveRot = (displayPlant && (!isAbsentCell || hasSuccession)) ? (displayRg ? ` rot-${displayRg.key}` : '') : '';
         const pm     = selectedPlantId ? ' placing-mode' : '';
-        const canPl  = !plant ? ' can-place' : '';
+        const canPl  = (!plant && !hasSuccession) ? ' can-place' : '';
         const pathCls = plant?._isPath ? ' gcell-path' : '';
         const dormantCls = isDormantCell ? ' gcell-dormant' : '';
-        const absentCls  = isAbsentCell  ? ' gcell-seasonal-absent' : '';
+        // Absent class only when truly absent (no succession occupying it)
+        const absentCls  = (isAbsentCell && !hasSuccession) ? ' gcell-seasonal-absent' : '';
+        const successionCls = hasSuccession ? ' gcell-succession' : '';
         const pathBg = plant?._isPath ? (cell?.pathColor || '#c8a882') : null;
         const seasonalBg = (seasonalMeta && !pathBg && !isAbsentCell) ? `;background:${seasonalMeta.color}` : '';
         const pathColorStyle = pathBg ? `;background:${pathBg};border-color:${pathBg}` : '';
-        const dragAttrs = (plant && isOrigin && !isAbsentCell)
+        const dragAttrs = (displayPlant && displayIsOrigin && !plant?._isPath)
           ? `draggable="true" ondragstart="Beds.dragStart(event,'${bed.id}',${r},${c})" ondragend="Beds.dragEnd()"`
           : '';
-        rowsHtml += `<div class="gcell${effectiveOcc}${effectiveCat}${effectiveRot}${pm}${canPl}${pathCls}${dormantCls}${absentCls}"
+        const displayInstanceId = hasSuccession ? succCell.instanceId : (cell?.instanceId || '');
+        rowsHtml += `<div class="gcell${effectiveOcc}${effectiveCat}${effectiveRot}${pm}${canPl}${pathCls}${dormantCls}${absentCls}${successionCls}"
           ${dragAttrs}
           style="width:${cs}px;height:${cs}px${pathColorStyle}${seasonalBg}"
           data-bed="${bed.id}" data-r="${r}" data-c="${c}"
-          data-instance="${cell?.instanceId || ''}"
+          data-instance="${displayInstanceId}"
           onclick="Beds.cellClick(event,'${bed.id}',${r},${c})"
           onmousedown="Beds.cellMouseDown(event,'${bed.id}',${r},${c})"
           onmouseenter="Beds.cellEnter(event,'${bed.id}',${r},${c})"
           onmouseleave="Beds.cellLeave('${bed.id}')"
           ondragover="Beds.dragOver(event,'${bed.id}',${r},${c})"
           ondrop="Beds.drop(event,'${bed.id}',${r},${c})">`;
-        if (plant && isOrigin && !isAbsentCell) {
-          if (plant._isPath) {
-            const pathDesc = cell?.pathDesc || '';
+        if (displayPlant && displayIsOrigin && (!isAbsentCell || hasSuccession)) {
+          if (displayPlant._isPath) {
+            const pathDesc = displayCell?.pathDesc || '';
             if (pathDesc) {
-              const blockRows = Math.max(1, Number(cell?.blockRows) || 1);
-              const blockCols = Math.max(1, Number(cell?.blockCols) || 1);
+              const blockRows = Math.max(1, Number(displayCell?.blockRows) || 1);
+              const blockCols = Math.max(1, Number(displayCell?.blockCols) || 1);
               const left = 10 + 28 + (c * (cs + 2));
               const top = 10 + 20 + (r * (cs + 2));
               const width = (blockCols * cs) + ((blockCols - 1) * 2);
@@ -2005,26 +2145,34 @@ const Beds = (() => {
             }
           } else {
             const fontSize = cs >= 56 ? '1.6rem' : (cs >= 40 ? '1.1rem' : '.9rem');
-            const density = densityPerCell(plant);
-            const dimensionLabel = cell.rowBlockMode && cell.rowBlockTotal > 1
-              ? `<span class="gcell-dimension" style="font-size:.5rem;color:#666;display:block;margin-top:2px">${cell.blockCols * CELL_CM}×${cell.blockRows * CELL_CM}cm</span>`
+            const density = densityPerCell(displayPlant);
+            const dimensionLabel = displayCell.rowBlockMode && displayCell.rowBlockTotal > 1
+              ? `<span class="gcell-dimension" style="font-size:.5rem;color:#666;display:block;margin-top:2px">${displayCell.blockCols * CELL_CM}×${displayCell.blockRows * CELL_CM}cm</span>`
               : '';
+            const dispRgLabel = displayRg?.full || displayRg?.label || 'Crop rotation family';
             rowsHtml += `<div class="gcell-inner">
-              <div class="gcell-emoji" style="font-size:${fontSize}">${plant.emoji}</div>
-                <div class="gcell-name" title="${escAttr(rg?.full || rg?.label || 'Crop rotation family')}">${escHtml(plant.name)}${density > 1 ? ` <span class="gcell-density">×${density}</span>` : ''}${dimensionLabel}</div>
+              <div class="gcell-emoji" style="font-size:${fontSize}">${displayPlant.emoji}</div>
+                <div class="gcell-name" title="${escAttr(dispRgLabel)}">${escHtml(displayPlant.name)}${density > 1 ? ` <span class="gcell-density">×${density}</span>` : ''}${dimensionLabel}</div>
               </div>
               `;
           }
         }
-        // Ghost hint for absent annual: faint emoji so you can tell something is planned
-        if (isAbsentCell && isOrigin) {
+        // Ghost hint for absent annual with no succession: faint emoji so you can tell something is planned
+        if (isAbsentCell && !hasSuccession && isOrigin) {
           rowsHtml += `<div class="gcell-absent-ghost" title="${escAttr(plant.name)} — not here this month">${plant.emoji}</div>`;
         }
-        if (showDeleteButton) {
+        // Succession indicator badge (bottom-right corner): shows what's hiding underneath
+        if (hasSuccession && displayIsOrigin) {
+          rowsHtml += `<div class="gcell-succession-hint" title="Succession: ${escAttr(plant.name)} will be here in-season">${plant.emoji}</div>`;
+        }
+        const showDeleteButtonEffective = !!(displayPlant && displayMeta && r === displayMeta.minR && c === displayMeta.maxC);
+        if (showDeleteButtonEffective) {
           rowsHtml += `<button class="gcell-del" onclick="Beds.removePlant(event,'${bed.id}',${r},${c})">✕</button>`;
         }
-        if (plant && !plant._isPath && !isAbsentCell && showLifecycleStrip) {
-          rowsHtml += `<div class="gcell-lc-strip" style="background:${lcMeta.color}" title="${lcMeta.label}"></div>`;
+        const displayLcMeta = LC_META[(hasSuccession ? succCell?.lifecycle : lifecycle) || 'planned'] || LC_META.planned;
+        const displayShowLifecycleStrip = !!(displayMeta && (!( displayMeta.rows > 1 || displayMeta.cols > 1) || r === displayMeta.maxR));
+        if (displayPlant && !displayPlant._isPath && (!isAbsentCell || hasSuccession) && displayShowLifecycleStrip) {
+          rowsHtml += `<div class="gcell-lc-strip" style="background:${displayLcMeta.color}" title="${displayLcMeta.label}"></div>`;
         }
         if (seasonalMeta && !isAbsentCell && showLifecycleStrip) {
           rowsHtml += `<div class="gcell-seasonal-strip" style="background:${seasonalMeta.stripColor}" title="${seasonalMeta.label}"></div>`;
@@ -2032,8 +2180,8 @@ const Beds = (() => {
         if (seasonalMeta && !isAbsentCell && isOrigin) {
           rowsHtml += `<div class="gcell-seasonal-badge" title="${seasonalMeta.label}">${seasonalMeta.icon}</div>`;
         }
-        if (plant && !plant._isPath && !isAbsentCell && !hasSeedImage && !isOrigin && isPerimeterCell) {
-          rowsHtml += `<div class="gcell-edge-icon" aria-hidden="true">${plant.emoji}</div>`;
+        if (displayPlant && !displayPlant._isPath && (!isAbsentCell || hasSuccession) && !hasSeedImage && !displayIsOrigin && displayIsPerimeterCell) {
+          rowsHtml += `<div class="gcell-edge-icon" aria-hidden="true">${displayPlant.emoji}</div>`;
         }
         rowsHtml += `</div>`;
       }
@@ -2153,8 +2301,14 @@ const Beds = (() => {
       placeArmedPlantAt(bedId, r, c);
     } else {
       // show info panel for occupied cell
+      // Prefer succession layer when primary is absent
       const key = `${r},${c}`;
-      const cell = normalizeCellValue(bed.cells[key], key);
+      const primaryCell = normalizeCellValue(bed.cells[key], key);
+      const primaryPlant = primaryCell ? PlantDB.get(primaryCell.plantId) : null;
+      const succRaw = bed.successionCells ? bed.successionCells[key] : null;
+      const succClickCell = succRaw ? normalizeCellValue(succRaw, key) : null;
+      const useSuccession = !!(primaryCell && primaryPlant && isCellAbsent(primaryCell, primaryPlant) && succClickCell);
+      const cell = useSuccession ? succClickCell : primaryCell;
       const pid = cell?.plantId;
       if (pid) {
         const target = { bedId, instanceId: cell.instanceId };
@@ -2195,8 +2349,10 @@ const Beds = (() => {
         }
         const infoTarget = lastClickedInstance;
         const infoBed = infoTarget ? beds.find(b => b.id === infoTarget.bedId) : null;
+        // Search both primary cells and succession cells for the origin
         const infoOrigin = infoBed
-          ? Object.values(infoBed.cells).find(v => v?.instanceId === infoTarget.instanceId && v?.origin)
+          ? (Object.values(infoBed.cells).find(v => v?.instanceId === infoTarget.instanceId && v?.origin)
+             || Object.values(infoBed.successionCells || {}).find(v => v?.instanceId === infoTarget.instanceId && v?.origin))
           : null;
         if (infoOrigin) {
           const infoPlant = PlantDB.get(infoOrigin.plantId);
@@ -2342,8 +2498,12 @@ const Beds = (() => {
     }
     const beds = Store.getBeds();
     const bed  = beds.find(b => b.id === bedId);
-    const target = bed ? normalizeCellValue(bed.cells[`${r},${c}`], `${r},${c}`) : null;
-    if (!bed || !target) return;
+    if (!bed) return;
+    const key = `${r},${c}`;
+    // Prefer succession target when the primary cell is absent (succession plant is what's rendered)
+    const succTarget = bed.successionCells ? normalizeCellValue(bed.successionCells[key], key) : null;
+    const target = succTarget || normalizeCellValue(bed.cells[key], key);
+    if (!target) return;
     pushUndo(bedId, bed);
     removePlantInstance(bed, r, c);
     selectedLifecycleInstances = selectedLifecycleInstances.filter(t => !(t.bedId === bedId && t.instanceId === target.instanceId));
@@ -2417,11 +2577,19 @@ const Beds = (() => {
     const plant = PlantDB.get(pid);
     if (!plant) return;
 
-    hoverInstanceCells(bedId, base.instanceId);
+    // Also check succession layer
+    const succRawHover = (bed.successionCells || {})[key];
+    const succHoverCell = succRawHover ? normalizeCellValue(succRawHover, key) : null;
+    const hoverPlant = succHoverCell && isCellAbsent(base, plant)
+      ? (PlantDB.get(succHoverCell.plantId) || plant)
+      : plant;
+    const hoverCell = (succHoverCell && isCellAbsent(base, plant)) ? succHoverCell : base;
+
+    hoverInstanceCells(bedId, hoverCell.instanceId);
 
     // Keep clicked selection pinned so hover does not hide lifecycle controls.
     if (lastClickedInstance) return;
-    if (!selectedPlantId) showPlantInfo(plant, base?.rotation || 0);
+    if (!selectedPlantId) showPlantInfo(hoverPlant, hoverCell.rotation || 0, hoverCell.instanceId, bedId);
   }
 
   function cellLeave(bedId) {
@@ -2430,6 +2598,15 @@ const Beds = (() => {
     });
     clearInstanceHover();
     clearPreview();
+    // If hover was driving the details panel (no click selection), restore default state
+    if (!lastClickedInstance && !selectedPlantId) {
+      const detail = document.getElementById('bed-info-detail');
+      if (detail) detail.style.display = 'none';
+      const editBtnSlot = document.getElementById('bed-info-edit-btn');
+      if (editBtnSlot) editBtnSlot.innerHTML = '';
+      syncArmedPanelVisibility(false);
+      syncLegendVisibility();
+    }
   }
 
   // ── info panel ────────────────────────────────────────────────
@@ -2739,6 +2916,34 @@ const Beds = (() => {
             <div style="font-size:.75rem;font-weight:700;color:${_rg.color}">${escHtml(_rg.full)}</div>
             <div style="font-size:.65rem;color:${_rg.color};opacity:.75;margin-top:1px">Avoid planting in the same bed within 3 years of other ${escHtml(_rg.label.toLowerCase())}.</div>
            </div>`; })()}
+      ${(() => {
+        if (p._isPath || selectedViewMonth === null) return '';
+        const monthName = ['January','February','March','April','May','June','July','August','September','October','November','December'][selectedViewMonth - 1];
+        const stage = getSeasonalStage(p, selectedViewMonth);
+        const sm = SEASONAL_STAGE_META[stage] || SEASONAL_STAGE_META.dormant;
+        // Determine if seasonal mode is active for this instance
+        let seasonalOn = p.perennial; // perennial is always on
+        if (!p.perennial && instanceId && bedId) {
+          const bed = Store.getBeds().find(b => b.id === bedId);
+          const origin = bed
+            ? (Object.values(bed.cells).find(v => v?.instanceId === instanceId && v?.origin)
+               || Object.values(bed.successionCells || {}).find(v => v?.instanceId === instanceId && v?.origin))
+            : null;
+          seasonalOn = !!(origin?.seasonalMode);
+        } else if (!p.perennial && !instanceId) {
+          // Armed plant preview — reflect current armed state
+          seasonalOn = armedSeasonalMode;
+        }
+        const offBadge = !seasonalOn
+          ? `<span style="margin-left:6px;font-size:.6rem;font-weight:800;padding:1px 6px;border-radius:8px;background:#e0e0e0;color:#666;vertical-align:middle;text-transform:uppercase">OFF</span>`
+          : '';
+        const dimStyle = !seasonalOn ? 'opacity:0.55;' : '';
+        return `<div style="margin-bottom:8px;padding:5px 8px;border-radius:var(--radius);background:${sm.color};border:1.5px solid ${seasonalOn ? sm.stripColor : '#bbb'};${dimStyle}">
+          <div style="font-size:.6rem;font-weight:800;color:${seasonalOn ? sm.stripColor : '#888'};text-transform:uppercase;letter-spacing:.04em;margin-bottom:2px">📅 Seasonal stage — ${monthName}${offBadge}</div>
+          <div style="font-size:.75rem;font-weight:700;color:${seasonalOn ? sm.stripColor : '#888'}">${sm.icon} ${sm.label}</div>
+        </div>`;
+      })()}
+      ${lcHtml}
       <div class="prop-grid">
         <div class="prop-item"><div class="prop-label">☀️ Sun</div><div class="prop-value">${capFirst(p.sun)}</div></div>
         <div class="prop-item"><div class="prop-label">💧 Water</div><div class="prop-value">${capFirst(p.water)}</div></div>
@@ -2756,14 +2961,19 @@ const Beds = (() => {
       ${bad.length  ? `<div style="margin-top:6px"><div style="font-size:.62rem;font-weight:800;color:#c62828;margin-bottom:4px">❌ AVOID</div>
         <div class="companion-list">${bad.map(q=>`<span class="ctag ctag-bad">${q.emoji} ${escHtml(q.name)}</span>`).join('')}</div></div>` : ''}
       ${pathEditHtml}
-      ${lcHtml}
       ${rowDetailsHtml}
       ${plantingModeHtml}
       ${transplantSourceHtml}
-      ${!p._isPath ? `<div style="margin-top:10px;padding-top:8px;border-top:1px solid var(--border)">
-        <button class="btn btn-secondary btn-sm" onclick="CustomPlants.openEdit('${p.id}')">✏️ Edit plant</button>
-      </div>` : ''}
     `;
+    const editBtnSlot = document.getElementById('bed-info-edit-btn');
+    if (editBtnSlot) {
+      editBtnSlot.innerHTML = !p._isPath
+        ? `<button class="btn btn-secondary btn-sm" onclick="CustomPlants.openEdit('${p.id}')">✏️ Edit plant</button>`
+        : '';
+    }
+    // Hide Armed Plant panel only when viewing a placed plant, not when previewing armed plant
+    if (instanceId) syncArmedPanelVisibility(true);
+    syncLegendVisibility();
   }
 
   function setArmedSeasonalMode(enabled) {
@@ -2795,7 +3005,11 @@ const Beds = (() => {
       if (!lastClickedInstance) {
         const detail = document.getElementById('bed-info-detail');
         if (detail) detail.style.display = 'none';
+        const editBtnSlot = document.getElementById('bed-info-edit-btn');
+        if (editBtnSlot) editBtnSlot.innerHTML = '';
+        syncArmedPanelVisibility(false);
       }
+      syncLegendVisibility();
       return;
     }
     const p = PlantDB.get(selectedPlantId);
@@ -2835,8 +3049,11 @@ const Beds = (() => {
       ${buildSeasonalModeHtml(p)}
       ${editPlantBtn}`;
 
+    // Restore Armed Plant panel visibility (may have been hidden by a previous bed-plant click)
+    syncArmedPanelVisibility(false);
     // Keep Plant Details synced with currently armed plant.
     showPlantInfo(p, selectedRotation);
+    syncLegendVisibility();
   }
 
   // ── stats panel ───────────────────────────────────────────────
@@ -3860,6 +4077,7 @@ const Beds = (() => {
   function snapshotBedState(bed) {
     return JSON.stringify({
       cells: bed?.cells || {},
+      successionCells: bed?.successionCells || {},
       plotLayout: Array.isArray(bed?.plotLayout) ? bed.plotLayout : [],
     });
   }
@@ -3868,11 +4086,13 @@ const Beds = (() => {
     const parsed = JSON.parse(snapshot);
     if (parsed && typeof parsed === 'object' && !Array.isArray(parsed) && Object.prototype.hasOwnProperty.call(parsed, 'cells')) {
       bed.cells = parsed.cells || {};
+      bed.successionCells = parsed.successionCells || {};
       bed.plotLayout = Array.isArray(parsed.plotLayout) ? parsed.plotLayout : [];
       return;
     }
     // Backward compatibility for snapshots created before plot layout was tracked.
     bed.cells = parsed || {};
+    bed.successionCells = {};
     bed.plotLayout = Array.isArray(bed.plotLayout) ? bed.plotLayout : [];
   }
 
@@ -3977,7 +4197,7 @@ const Beds = (() => {
     updateSelectedPathMeta,
     promptRenameBed,
     undo, redo, updateStats,
-    setViewMonth, setArmedSeasonalMode,
+    setViewMonth, stepViewMonth, setArmedSeasonalMode,
     setLifecycle, setArmedSeed, setInstanceSeed, setJournalSeason, setJournalBedFilter, setJournalSearch, openJournalEvent,
     handleJournalImageLoad, handleJournalImageError, handleCellImageLoad, handleCellImageError, handlePlantSeedImageLoad, handlePlantSeedImageError, openJournalImage, setJournalPhotoFilename,
     previewJournalImageFile, usePickedJournalFilename, syncJournalImageHint,
