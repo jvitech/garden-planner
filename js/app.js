@@ -238,47 +238,119 @@ const Modal = (() => {
 
 const HelpUI = (() => {
   const HELP_HTML = `
-    <h3 style="margin:0 0 8px">Garden Planner Guide</h3>
-    <p style="margin:0 0 10px;color:var(--text-muted)">Offline-first planner for beds, seeds, lifecycle tracking, and backups.</p>
+    <h3 style="margin:0 0 4px">🌱 Garden Planner — User Guide</h3>
+    <p style="margin:0 0 14px;color:var(--text-muted);font-size:.78rem">Offline-first planner for beds, seeds, lifecycle tracking, and seasonal planning.</p>
 
-    <h4 style="margin:12px 0 6px">Quick Start</h4>
-    <ol style="margin:0 0 10px 18px;padding:0">
-      <li>Create a bed in Beds.</li>
-      <li>Arm a plant from the library and place it in the grid.</li>
-      <li>Add seed packets in Seeds and optionally link a packet while planting.</li>
-      <li>Update lifecycle phase in Plant Details as the crop progresses.</li>
-      <li>Open Settings for garden profile and backup controls.</li>
+    <h4 style="margin:0 0 6px;color:var(--primary-dark)">⚡ Quick Start</h4>
+    <ol style="margin:0 0 14px 18px;padding:0">
+      <li>Create a <strong>Bed</strong> using the + buttons at the top of the Beds tab.</li>
+      <li>Click a plant in the library panel to <strong>arm</strong> it (it appears in the Armed Plant panel).</li>
+      <li>Click any empty cell in a bed to <strong>place</strong> the plant.</li>
+      <li>Click a placed plant to open <strong>Plant Details</strong> and track its lifecycle.</li>
+      <li>Add seed packets in the <strong>Seeds</strong> tab and link them to placements for inventory deduction.</li>
     </ol>
 
-    <h4 style="margin:12px 0 6px">Tabs</h4>
-    <ul style="margin:0 0 10px 18px;padding:0">
-      <li><strong>Beds</strong>: layout, placement, lifecycle updates, details.</li>
-      <li><strong>Seeds</strong>: inventory, germination quality, sort/filter, rating.</li>
-      <li><strong>My Plants</strong>: create custom plants, edit built-ins, export/import plants.</li>
-      <li><strong>Calendar</strong>: sow/transplant/harvest month windows.</li>
-      <li><strong>Stats</strong>: outcome trends, germination success, speed vs expected.</li>
-      <li><strong>Journal</strong>: timeline of lifecycle events by bed/date/season.</li>
+    <h4 style="margin:0 0 6px;color:var(--primary-dark)">🛏️ Bed Types</h4>
+    <ul style="margin:0 0 14px 18px;padding:0">
+      <li><strong>Bed</strong> — standard raised bed or in-ground patch.</li>
+      <li><strong>Plot</strong> — large area divided into named sub-zones. Use ➕ Add bed to draw zones, then select a zone before planting.</li>
+      <li><strong>Seed Tray</strong> — tracks seedlings before transplanting. Link tray plants to bed plants in Plant Details.</li>
     </ul>
 
-    <h4 style="margin:12px 0 6px">Lifecycle Phases</h4>
-    <p style="margin:0 0 8px">planned, direct_sow, tray_seeded, germinated, transplanted, growing, harvested_once, harvested_continuous, gone_to_seed, failed.</p>
-
-    <h4 style="margin:12px 0 6px">Backups and Frequency</h4>
-    <ul style="margin:0 0 10px 18px;padding:0">
-      <li>Use header Backup/Restore for manual JSON files.</li>
-      <li>Use Settings to connect a backup folder and view backup history.</li>
-      <li><strong>Auto-backup frequency (minutes)</strong> controls periodic backups (minimum 5, default 60).</li>
-      <li>Retention protects day/week/month points before rotating extra backups.</li>
+    <h4 style="margin:0 0 6px;color:var(--primary-dark)">🌿 Placing Plants</h4>
+    <ul style="margin:0 0 14px 18px;padding:0">
+      <li>Click a plant in the library to arm it, then click a cell to place it.</li>
+      <li>Hold <strong>R</strong> or use the rotate button to rotate a plant's footprint before placing.</li>
+      <li>Enable <strong>Plant in rows mode</strong> in the Armed Plant panel, then drag a rectangle to fill a block with evenly spaced rows.</li>
+      <li>Hold the mouse button and drag to <strong>paint</strong> multiple cells.</li>
+      <li>Drag an existing plant to <strong>move</strong> it. Ctrl+drag copies it.</li>
+      <li>Click the ✕ on a cell (top-right corner on hover) to remove a plant.</li>
+      <li>Press <strong>Escape</strong> to disarm without placing.</li>
+      <li><strong>Ctrl+Z</strong> / <strong>Ctrl+Y</strong> to undo / redo.</li>
     </ul>
 
-    <h4 style="margin:12px 0 6px">Multi-Garden Profiles</h4>
-    <p style="margin:0 0 10px">Create/switch/delete garden profiles in Settings. The active garden name appears in the header.</p>
+    <h4 style="margin:0 0 6px;color:var(--primary-dark)">📅 Seasonal View</h4>
+    <ul style="margin:0 0 14px 18px;padding:0">
+      <li>Use the <strong>📅 View</strong> month selector in the toolbar (or ‹ › arrows) to switch to a monthly view.</li>
+      <li>Plants with <strong>Seasonal mode ON</strong> (toggle in the Armed Plant panel before placing) show a coloured stage strip and tint:
+        <ul style="margin:4px 0 0 16px">
+          <li>🌰 Sowing — 🌱 Transplanting — 🌿 Growing — 🌾 Harvesting</li>
+          <li>💤 Dormant (perennial, in ground, shown dimmed)</li>
+          <li>Ghost / empty appearance = annual not present this month (free for succession)</li>
+        </ul>
+      </li>
+      <li><strong>Perennial plants</strong> always show seasonal stages without needing seasonal mode toggled.</li>
+      <li>Seasonal stage dates come from the plant definition. Edit a plant to change its sow/harvest months — all beds update automatically.</li>
+      <li>The <strong>Plant Details</strong> panel shows the current seasonal stage with an <em>OFF</em> badge when seasonal mode is disabled for that instance.</li>
+    </ul>
 
-    <h4 style="margin:12px 0 6px">Shortcuts</h4>
-    <ul style="margin:0 0 10px 18px;padding:0">
-      <li>Escape: disarm plant.</li>
-      <li>R: rotate rectangular footprint.</li>
-      <li>Ctrl+Z / Ctrl+Y: undo/redo.</li>
+    <h4 style="margin:0 0 6px;color:var(--primary-dark)">🔄 Succession Planting</h4>
+    <ul style="margin:0 0 14px 18px;padding:0">
+      <li>When a seasonal annual is absent (ghost cell), you can place a different plant over it — it is stored as a <strong>succession plant</strong>.</li>
+      <li>The succession plant shows normally; a tiny ghost emoji in the corner reminds you of the out-of-season primary plant underneath.</li>
+      <li>A dashed orange outline marks succession cells.</li>
+      <li>Clicking the ✕ on a succession cell removes the succession plant, leaving the primary untouched.</li>
+    </ul>
+
+    <h4 style="margin:0 0 6px;color:var(--primary-dark)">🔍 Plant Details Panel</h4>
+    <ul style="margin:0 0 14px 18px;padding:0">
+      <li><strong>Hover</strong> over a placed plant to preview its details without selecting it.</li>
+      <li><strong>Click</strong> a plant to select it and access lifecycle controls.</li>
+      <li>Ctrl+click or Shift+click to select <strong>multiple plants</strong> and update their lifecycle together.</li>
+      <li>Shows: lifecycle badge, crop rotation group, seasonal stage (current month), growth status, seed packet, companions, and row details.</li>
+      <li>Click <strong>✏️ Edit plant</strong> (top of the panel) to modify the plant definition globally.</li>
+    </ul>
+
+    <h4 style="margin:0 0 6px;color:var(--primary-dark)">🌱 Lifecycle Phases</h4>
+    <ul style="margin:0 0 14px 18px;padding:0">
+      <li>📋 Planned → 🌰 Direct sow / 🪴 Seedling tray → 🌱 Germinated → 🏺 Ready to transplant → 🌤️ Hardened off → 🌿 Transplanted → 🍃 Growing → 🧺 Harvested → ✂️ Harvesting continuous → 🌾 Gone to seed / ✗ Failed</li>
+      <li>Phase dates are recorded in the <strong>Phase Dates</strong> timeline in Plant Details.</li>
+      <li>Link a tray seedling to a bed plant via the <strong>Source from tray</strong> section to track transplanting.</li>
+    </ul>
+
+    <h4 style="margin:0 0 6px;color:var(--primary-dark)">♻️ Crop Rotation</h4>
+    <ul style="margin:0 0 14px 18px;padding:0">
+      <li>Each plant family has a colour: purple = Legumes, blue = Brassicas, red = Solanaceae, yellow = Apiaceae/Alliaceae.</li>
+      <li>A warning appears if you place a plant in a bed that had the same family within the last 3 years.</li>
+      <li>To disable rotation tracking for a plant, set the <strong>Crop rotation family</strong> dropdown to <em>⛔ Disabled</em> in the plant editor.</li>
+    </ul>
+
+    <h4 style="margin:0 0 6px;color:var(--primary-dark)">🗺️ Plot Beds & Zones</h4>
+    <ul style="margin:0 0 14px 18px;padding:0">
+      <li>Click <strong>➕ Add bed</strong> on a Plot bed to draw a named sub-zone by clicking two opposite corners.</li>
+      <li>Click a zone label to <strong>select</strong> it (yellow border). You must have a zone selected before planting in a plot.</li>
+      <li>Drag the ⠿ handle beside the zone label to move the zone. Drag the corner handles to resize.</li>
+      <li>The zone label floats above the zone border for easy identification.</li>
+    </ul>
+
+    <h4 style="margin:0 0 6px;color:var(--primary-dark)">📚 Plant Library Filters</h4>
+    <ul style="margin:0 0 14px 18px;padding:0">
+      <li>Filter by category: All, 🥦 Vegetable, 🌿 Herb, 🍓 Fruit, 🌸 Flower, 🛤️ Infrastructure, ✏️ Custom.</li>
+      <li><strong>🌱 Sow</strong> — shows only plants you can sow or transplant in the currently selected view month.</li>
+      <li><strong>♾️ Perennial</strong> — shows perennial plants only.</li>
+      <li>Tick <strong>Only with seed packets</strong> to filter to plants you have seeds for.</li>
+    </ul>
+
+    <h4 style="margin:0 0 6px;color:var(--primary-dark)">🌿 Plant Lifecycle Types</h4>
+    <ul style="margin:0 0 14px 18px;padding:0">
+      <li>🌱 <strong>Annual</strong> — completes in one season. Supported in seasonal mode.</li>
+      <li>🌿 <strong>Biennial</strong> — takes two years (e.g. parsley, carrot, onion, cabbage, coriander). Planned like an annual for bed layout but useful to note for seed collection.</li>
+      <li>♾️ <strong>Perennial</strong> — lives multiple years. Always shows seasonal stages; set dormant months in the plant editor.</li>
+    </ul>
+
+    <h4 style="margin:0 0 6px;color:var(--primary-dark)">💾 Backups & Profiles</h4>
+    <ul style="margin:0 0 14px 18px;padding:0">
+      <li>Use <strong>Backup / Restore</strong> in the header for manual JSON export/import.</li>
+      <li>Connect a backup folder in <strong>Settings</strong> for automatic periodic backups with retention rules.</li>
+      <li>Create and switch between multiple <strong>garden profiles</strong> in Settings. The active profile name appears in the header.</li>
+    </ul>
+
+    <h4 style="margin:0 0 6px;color:var(--primary-dark)">⌨️ Keyboard Shortcuts</h4>
+    <ul style="margin:0 0 6px 18px;padding:0">
+      <li><strong>Escape</strong> — disarm plant / cancel placement.</li>
+      <li><strong>R</strong> — rotate plant footprint (when armed).</li>
+      <li><strong>Ctrl+Z</strong> — undo last bed change.</li>
+      <li><strong>Ctrl+Y</strong> — redo.</li>
     </ul>
   `;
 
