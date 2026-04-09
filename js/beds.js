@@ -1395,6 +1395,8 @@ const Beds = (() => {
         if (selectedViewMonth === null) return false;
         const canSow = (p.sow ?? []).includes(selectedViewMonth) || (p.tr ?? []).includes(selectedViewMonth);
         if (!canSow) return false;
+      } else if (cat === 'perennial') {
+        if (!p.perennial) return false;
       } else if (cat !== 'all' && p.cat !== cat) return false;
       if (search && !p.name.toLowerCase().includes(search)) return false;
       if (showSeededOnly && !seedPlantIds.has(p.id)) return false;
@@ -2216,7 +2218,7 @@ const Beds = (() => {
           ? `<div title="Resize" style="position:absolute;top:-4px;left:-4px;width:10px;height:10px;background:#1d3557;border-radius:2px;cursor:nwse-resize;pointer-events:auto" onmousedown="event.stopPropagation();Beds.zoneMouseDown(event,'${bed.id}','${zId}','resize-tl')"></div><div title="Resize" style="position:absolute;top:-4px;right:-4px;width:10px;height:10px;background:#1d3557;border-radius:2px;cursor:nesw-resize;pointer-events:auto" onmousedown="event.stopPropagation();Beds.zoneMouseDown(event,'${bed.id}','${zId}','resize-tr')"></div><div title="Resize" style="position:absolute;bottom:-4px;left:-4px;width:10px;height:10px;background:#1d3557;border-radius:2px;cursor:nesw-resize;pointer-events:auto" onmousedown="event.stopPropagation();Beds.zoneMouseDown(event,'${bed.id}','${zId}','resize-bl')"></div><div title="Resize" style="position:absolute;bottom:-4px;right:-4px;width:10px;height:10px;background:#1d3557;border-radius:2px;cursor:nwse-resize;pointer-events:auto" onmousedown="event.stopPropagation();Beds.zoneMouseDown(event,'${bed.id}','${zId}','resize-br')"></div>`
           : '';
         return `<div id="plot-zone-${bed.id}-${zId}" style="position:absolute;left:${left}px;top:${top}px;width:${width}px;height:${height}px;border:${active ? 3 : 2}px dashed ${active ? '#1d3557' : '#3a86ff'};border-radius:6px;background:${active ? 'rgba(29,53,87,.14)' : 'rgba(58,134,255,.08)'}">
-          <div onclick="event.stopPropagation();Beds.selectPlotZone('${bed.id}','${zId}')" style="position:absolute;left:2px;top:2px;max-width:calc(100% - ${active && canInteract ? 36 : 4}px);font-size:.58rem;font-weight:800;line-height:1.1;padding:1px 4px;border-radius:10px;background:rgba(255,255,255,.92);border:1px solid rgba(0,0,0,.1);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;pointer-events:${labelPtrEvents};cursor:pointer">${escHtml(label)}</div>
+          <div onclick="event.stopPropagation();Beds.selectPlotZone('${bed.id}','${zId}')" style="position:absolute;left:0;top:-18px;max-width:calc(100% + 4px);font-size:.58rem;font-weight:800;line-height:1.1;padding:1px 6px;border-radius:6px 6px 0 0;background:${active ? '#1d3557' : '#3a86ff'};color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;pointer-events:${labelPtrEvents};cursor:pointer">${escHtml(label)}</div>
           ${deleteHandle}${moveHandle}${resizeHandles}
         </div>`;
       }).join('')}
@@ -2900,21 +2902,21 @@ const Beds = (() => {
     el.innerHTML = `
       ${seedAssignHtml}
       ${(() => { const rg = rotationGroup(p); return `
-      <div style="display:flex;align-items:center;gap:10px;padding:8px;background:${rg.bg};border-radius:var(--radius);border:2px solid ${rg.border};margin-bottom:8px">
+      <div style="display:flex;align-items:center;gap:10px;padding:8px;background:${rg.bg};border-radius:var(--radius);border:2px solid ${rg.border};margin-bottom:8px">`; })()}
         <div style="font-size:2.2rem">${seedImageHtml ? '' : p.emoji}</div>
         ${seedImageHtml ? `<div style="flex-shrink:0">${seedImageHtml}</div>` : ''}
         <div style="flex:1">
           <div style="font-weight:800;font-size:.95rem">${escHtml(p.name)}</div>
           <div style="font-size:.7rem;color:var(--text-muted)">${p.cat} · ${fp.cols}×${fp.rows} cells${rotation ? `, ${rotation}°` : ''}</div>
+          <div style="margin-top:2px">${p.perennial ? '<span style="font-size:.62rem;font-weight:800;padding:1px 6px;border-radius:8px;background:#d8f3dc;border:1px solid #52b788;color:#2d7a40">♾️ Perennial</span>' : p.biennial ? '<span style="font-size:.62rem;font-weight:800;padding:1px 6px;border-radius:8px;background:#e8f4fd;border:1px solid #4a9eca;color:#1a5f8a">🌿 Biennial</span>' : '<span style="font-size:.62rem;font-weight:800;padding:1px 6px;border-radius:8px;background:#f0faf0;border:1px solid #81c784;color:#2e7d32">🌱 Annual</span>'}</div>
         </div>
-        <span style="font-size:.62rem;font-weight:800;padding:2px 7px;border-radius:10px;background:${rg.bg};border:1.5px solid ${rg.border};color:${rg.color};white-space:nowrap">♻️ ${escHtml(rg.label)}</span>
-      </div>`;})()}
+      </div>
       ${(() => { const _rg = rotationGroup(p); return _rg.key === 'disabled'
         ? `<div style="margin-bottom:8px;padding:5px 8px;border-radius:var(--radius);background:#f5f5f5;border:1.5px solid #aaa;color:#777;font-size:.7rem">♻️ Crop rotation tracking <strong>disabled</strong> for this plant.</div>`
         : `<div style="margin-bottom:8px;padding:5px 8px;border-radius:var(--radius);background:${_rg.bg};border:1.5px solid ${_rg.border}">
             <div style="font-size:.6rem;font-weight:800;color:${_rg.color};text-transform:uppercase;letter-spacing:.04em;margin-bottom:2px">♻️ Crop rotation group</div>
             <div style="font-size:.75rem;font-weight:700;color:${_rg.color}">${escHtml(_rg.full)}</div>
-            <div style="font-size:.65rem;color:${_rg.color};opacity:.75;margin-top:1px">Avoid planting in the same bed within 3 years of other ${escHtml(_rg.label.toLowerCase())}.</div>
+            <div style="font-size:.65rem;color:${_rg.color};opacity:.75;margin-top:1px">Avoid planting in the same bed within 3 years of other ${escHtml(_rg.label.toLowerCase())}. To disable tracking, edit the plant and select "Disabled" in the rotation family list.</div>
            </div>`; })()}
       ${(() => {
         if (p._isPath || selectedViewMonth === null) return '';

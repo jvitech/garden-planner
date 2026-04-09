@@ -121,15 +121,16 @@ const FAMILY_OPTIONS = [
                                                                   { val:'tropaeolaceae',label:'Tropaeolaceae — Nasturtium' }] },
 ];
 
-function familySelectHtml(id, selectedVal) {
-  const blankOpt = `<option value="">— not set —</option>`;
+function familySelectHtml(id, selectedVal, rotationDisabled) {
+  const disabledOpt = `<option value="__disabled__" ${rotationDisabled ? 'selected' : ''}>⛔ Disabled (no rotation tracking)</option>`;
+  const blankOpt = `<option value="" ${!rotationDisabled && !selectedVal ? 'selected' : ''}>— not set —</option>`;
   const groups = FAMILY_OPTIONS.map(g => {
     const opts = g.families.map(f =>
-      `<option value="${f.val}" ${selectedVal === f.val ? 'selected' : ''}>${escHtml(f.label)}</option>`
+      `<option value="${f.val}" ${!rotationDisabled && selectedVal === f.val ? 'selected' : ''}>${escHtml(f.label)}</option>`
     ).join('');
     return `<optgroup label="${escAttr(g.group)}">${opts}</optgroup>`;
   }).join('');
-  return `<select id="${id}">${blankOpt}${groups}</select>`;
+  return `<select id="${id}">${disabledOpt}${blankOpt}${groups}</select>`;
 }
 function capFirst(str) { return str ? str.charAt(0).toUpperCase() + str.slice(1) : ''; }
 function sunTxt(s)     { return s === 'full' ? '☀️ Full' : s === 'partial' ? '⛅ Part' : '🌥️ Shade'; }
@@ -1183,11 +1184,13 @@ const CustomPlants = (() => {
         <div class="form-hint">Hint shown in plant details. Does not enforce anything.</div>
       </div>
       <div class="form-row">
-        <label style="flex-direction:row;align-items:center;gap:8px;font-size:.78rem;text-transform:none;cursor:pointer">
-          <input id="cp-perennial" type="checkbox" ${existing?.perennial ? 'checked' : ''} onchange="document.getElementById('cp-dormant-row').style.display=this.checked?'':'none'">
-          Perennial (lives multiple years)
-        </label>
-        <div class="form-hint">Perennials show as always-active in seasonal view, except during their dormant months.</div>
+        <label>Plant lifecycle</label>
+        <select id="cp-lifecycle" onchange="document.getElementById('cp-dormant-row').style.display=this.value==='perennial'?'':'none'">
+          <option value="annual"    ${!existing?.perennial && !existing?.biennial ? 'selected' : ''}>🌱 Annual</option>
+          <option value="biennial"  ${existing?.biennial  ? 'selected' : ''}>🌿 Biennial (2 years — treated as annual for planning)</option>
+          <option value="perennial" ${existing?.perennial ? 'selected' : ''}>♾️ Perennial (lives multiple years)</option>
+        </select>
+        <div class="form-hint">Perennials show as always-active in seasonal view except during dormant months. Biennials complete their cycle over two years but are planned like annuals.</div>
       </div>
       <div class="form-row" id="cp-dormant-row" style="display:${existing?.perennial ? '' : 'none'}">
         <label>Dormant months (comma-separated, 1=Jan)</label>
@@ -1216,15 +1219,8 @@ const CustomPlants = (() => {
       </div>
       <div class="form-row">
         <label>Crop rotation family</label>
-        ${familySelectHtml('cp-family', existing?.family || '')}
-        <div class="form-hint">Sets the colored chip on the cell and the 3-year rotation warning.</div>
-      </div>
-      <div class="form-row">
-        <label style="flex-direction:row;align-items:center;gap:8px;font-size:.78rem;text-transform:none;cursor:pointer">
-          <input id="cp-rotation-disabled" type="checkbox" ${existing?.rotationDisabled ? 'checked' : ''}>
-          Disable crop rotation tracking for this plant
-        </label>
-        <div class="form-hint">When checked, no 3-year warning is shown and the rotation chip is hidden.</div>
+        ${familySelectHtml('cp-family', existing?.family || '', existing?.rotationDisabled || false)}
+        <div class="form-hint">Sets the colored chip on the cell and the 3-year rotation warning. Choose "Disabled" to skip rotation tracking.</div>
       </div>
       <div class="form-row">
         <label>Growing notes</label>
@@ -1280,7 +1276,8 @@ const CustomPlants = (() => {
       daysToHarvest:document.getElementById('cp-days').value.trim() || '?',
       germinationDaysMin,
       germinationDaysMax,
-      perennial:    document.getElementById('cp-perennial').checked || false,
+      perennial:    document.getElementById('cp-lifecycle').value === 'perennial',
+      biennial:     document.getElementById('cp-lifecycle').value === 'biennial',
       dormant:      parseMon('cp-dormant'),
       sow:          parseMon('cp-sow'),
       tr:           parseMon('cp-tr'),
@@ -1288,8 +1285,8 @@ const CustomPlants = (() => {
       good:         getMulti('cp-good'),
       bad:          getMulti('cp-bad'),
       notes:        document.getElementById('cp-notes').value.trim(),
-      family:       document.getElementById('cp-family').value || null,
-      rotationDisabled: document.getElementById('cp-rotation-disabled').checked || false,
+      family:       (document.getElementById('cp-family').value === '__disabled__' ? null : document.getElementById('cp-family').value) || null,
+      rotationDisabled: document.getElementById('cp-family').value === '__disabled__',
       plantingMode: document.getElementById('cp-planting-mode').value || null,
     };
 
@@ -1327,6 +1324,7 @@ const CustomPlants = (() => {
       germinationDaysMin: src.germinationDaysMin ?? null,
       germinationDaysMax: src.germinationDaysMax ?? null,
       perennial: src.perennial || false,
+      biennial:  src.biennial  || false,
       dormant: [...(src.dormant ?? [])],
       sow:  [...(src.sow  ?? [])],
       tr:   src.tr ? [...src.tr] : [],
@@ -1539,15 +1537,8 @@ const BuiltinPlants = (() => {
       </div>
       <div class="form-row">
         <label>Crop rotation family</label>
-        ${familySelectHtml('bp-family', current.family || '')}
-        <div class="form-hint">Sets the colored chip on the cell and the 3-year rotation warning.</div>
-      </div>
-      <div class="form-row">
-        <label style="flex-direction:row;align-items:center;gap:8px;font-size:.78rem;text-transform:none;cursor:pointer">
-          <input id="bp-rotation-disabled" type="checkbox" ${current.rotationDisabled ? 'checked' : ''}>
-          Disable crop rotation tracking for this plant
-        </label>
-        <div class="form-hint">When checked, no 3-year warning is shown and the rotation chip is hidden.</div>
+        ${familySelectHtml('bp-family', current.family || '', current.rotationDisabled || false)}
+        <div class="form-hint">Sets the colored chip on the cell and the 3-year rotation warning. Choose "Disabled" to skip rotation tracking.</div>
       </div>
       <div class="form-row">
         <label>Preferred planting method</label>
@@ -1559,11 +1550,13 @@ const BuiltinPlants = (() => {
         <div class="form-hint">Hint shown in plant details. Does not enforce anything.</div>
       </div>
       <div class="form-row">
-        <label style="flex-direction:row;align-items:center;gap:8px;font-size:.78rem;text-transform:none;cursor:pointer">
-          <input id="bp-perennial" type="checkbox" ${current.perennial ? 'checked' : ''} onchange="document.getElementById('bp-dormant-row').style.display=this.checked?'':'none'">
-          Perennial (lives multiple years)
-        </label>
-        <div class="form-hint">Perennials show as always-active in seasonal view, except during their dormant months.</div>
+        <label>Plant lifecycle</label>
+        <select id="bp-lifecycle" onchange="document.getElementById('bp-dormant-row').style.display=this.value==='perennial'?'':'none'">
+          <option value="annual"    ${!current.perennial && !current.biennial ? 'selected' : ''}>🌱 Annual</option>
+          <option value="biennial"  ${current.biennial  ? 'selected' : ''}>🌿 Biennial (2 years — treated as annual for planning)</option>
+          <option value="perennial" ${current.perennial ? 'selected' : ''}>♾️ Perennial (lives multiple years)</option>
+        </select>
+        <div class="form-hint">Perennials show as always-active in seasonal view except during dormant months. Biennials complete their cycle over two years but are planned like annuals.</div>
       </div>
       <div class="form-row" id="bp-dormant-row" style="display:${current.perennial ? '' : 'none'}">
         <label>Dormant months (comma-separated, 1=Jan)</label>
@@ -1627,10 +1620,11 @@ const BuiltinPlants = (() => {
         daysToHarvest: document.getElementById('bp-days').value.trim() || '?',
         germinationDaysMin,
         germinationDaysMax,
-        family: document.getElementById('bp-family').value || null,
-        rotationDisabled: document.getElementById('bp-rotation-disabled').checked || false,
+        family: (document.getElementById('bp-family').value === '__disabled__' ? null : document.getElementById('bp-family').value) || null,
+        rotationDisabled: document.getElementById('bp-family').value === '__disabled__',
         plantingMode: document.getElementById('bp-planting-mode').value || null,
-        perennial: document.getElementById('bp-perennial').checked || false,
+        perennial: document.getElementById('bp-lifecycle').value === 'perennial',
+        biennial:  document.getElementById('bp-lifecycle').value === 'biennial',
         dormant: parseMon('bp-dormant'),
         sow: parseMon('bp-sow'),
         tr: parseMon('bp-tr'),
