@@ -2529,6 +2529,50 @@ const Beds = (() => {
     updateStats();
   }
 
+  function removeSelectedPlants() {
+    const targets = getLifecycleTargets();
+    if (!targets.length) return;
+    if (!confirm(`Delete ${targets.length} selected plant${targets.length !== 1 ? 's' : ''}? This cannot be undone.`)) return;
+
+    const beds = Store.getBeds();
+    const touchedIds = new Set();
+
+    targets.forEach(({ bedId, instanceId }) => {
+      const bed = beds.find(b => b.id === bedId);
+      if (!bed) return;
+      // Find an origin cell for this instance to get row/col
+      const entry = Object.entries(bed.cells).find(([, v]) => {
+        const c = normalizeCellValue(v, '');
+        return c?.instanceId === instanceId && c?.origin;
+      }) || Object.entries(bed.successionCells || {}).find(([, v]) => {
+        const c = normalizeCellValue(v, '');
+        return c?.instanceId === instanceId && c?.origin;
+      });
+      if (!entry) return;
+      const [key] = entry;
+      const [r, c] = key.split(',').map(Number);
+      pushUndo(bedId, bed);
+      removePlantInstance(bed, r, c);
+      touchedIds.add(bedId);
+    });
+
+    touchedIds.forEach(id => {
+      const bed = beds.find(b => b.id === id);
+      if (bed) Store.updateBed(bed);
+    });
+
+    selectedLifecycleInstances = [];
+    lastClickedInstance = null;
+    lastClickedCell = null;
+    clearInstanceFocus();
+
+    renderBedList();
+    renderCanvas();
+    renderBedJournal();
+    updateStats();
+    Toast.show(`Deleted ${targets.length} plant${targets.length !== 1 ? 's' : ''}`);
+  }
+
   function cellEnter(event, bedId, r, c) {
     if (Number.isFinite(event?.clientX)) lastPointerClientX = event.clientX;
     if (Number.isFinite(event?.clientY)) lastPointerClientY = event.clientY;
@@ -2802,6 +2846,9 @@ const Beds = (() => {
             })()}
           </select>
         </div>
+        ${selectionCount > 1
+          ? `<button class="btn btn-danger btn-sm" style="margin-top:8px;width:100%" onclick="Beds.removeSelectedPlants()">🗑️ Delete ${selectionCount} selected plants</button>`
+          : ''}
         ${timelineHtml}
       </div>`;
     }
@@ -4190,7 +4237,7 @@ const Beds = (() => {
   return {
     init, renderLibrary, renderCanvas, renderBedList,
     selectBed, openBedJournal, openJournalAll, armPlant, disarm, rotateSelection,
-    cellClick, removePlant, cellEnter, cellLeave,
+    cellClick, removePlant, removeSelectedPlants, cellEnter, cellLeave,
     cellMouseDown,
     dragStart, dragOver, drop, dragEnd,
     showPlantInfo, updateSelectedPanel, setRowMode,
