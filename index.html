@@ -28,6 +28,7 @@
   <button id="tab-plants"    class="tab-btn"        onclick="switchTab('plants')">✏️ My Plants</button>
   <button id="tab-calendar"  class="tab-btn"        onclick="switchTab('calendar')">📅 Calendar</button>
   <button id="tab-stats"     class="tab-btn"        onclick="switchTab('stats')">📈 Stats</button>
+  <button id="tab-planning"  class="tab-btn"        onclick="switchTab('planning')">📋 Planning</button>
   <button id="tab-journal"   class="tab-btn"        onclick="Beds.openJournalAll()">📒 Journal</button>
 </nav>
 
@@ -227,6 +228,17 @@
       Tracks outcomes by plant type using growth-status history and archived seasons.
     </div>
     <div class="stats-wrap" id="stats-wrap"></div>
+  </div>
+
+  <div id="page-planning" class="page" style="flex-direction:column;overflow:auto">
+    <div id="planning-toolbar" style="padding:10px 20px;background:var(--surface);border-bottom:1px solid var(--border);display:flex;align-items:center;gap:12px;flex-shrink:0;flex-wrap:wrap">
+      <span style="font-size:.78rem;font-weight:700;color:var(--primary-dark)">📋 Your Garden To-Do List</span>
+      <span style="font-size:.73rem;color:var(--text-muted)" id="planning-date-label"></span>
+      <select id="planning-bed-filter" onchange="PlanningView.setBedFilter(this.value)" style="max-width:200px"></select>
+      <button class="btn btn-sm btn-secondary" onclick="PlanningView.render()">↺ Refresh</button>
+      <span style="font-size:.72rem;color:var(--text-muted);margin-left:4px" id="planning-task-count"></span>
+    </div>
+    <div class="planning-wrap" id="planning-wrap"></div>
   </div>
 
   <div id="page-journal" class="page" style="flex-direction:column;overflow:auto">
@@ -459,6 +471,7 @@
 <script src="js/store.js"></script>
 <script src="js/app.js"></script>
 <script src="js/beds.js?v=20260323f"></script>
+<script src="js/planning.js"></script>
 <script src="js/inventory.js"></script>
 <script>
 function setLibCat(btn) {

@@ -1690,3 +1690,145 @@ body {
   font-weight: 700;
   margin-top: 4px;
 }
+
+/* ================================================================
+   PLANNING VIEW
+   ================================================================ */
+.planning-wrap {
+  padding: 16px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  overflow: auto;
+}
+
+.planning-empty {
+  margin: 40px auto;
+  text-align: center;
+  color: var(--text-muted);
+  max-width: 340px;
+}
+
+.planning-group {}
+
+.planning-group-hdr {
+  font-size: .76rem;
+  font-weight: 800;
+  padding: 7px 14px;
+  border-radius: var(--radius) var(--radius) 0 0;
+  border: 1px solid transparent;
+  border-bottom: none;
+}
+.planning-hdr--overdue  { background: #fff0f0; border-color: #f44336; color: #b71c1c; }
+.planning-hdr--now      { background: #e8f5e9; border-color: var(--primary-light); color: var(--primary-dark); }
+.planning-hdr--soon     { background: #fff8e1; border-color: var(--accent); color: #5c3d00; }
+.planning-hdr--upcoming { background: var(--surface2); border-color: var(--border); color: var(--text-muted); }
+
+.planning-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(270px, 1fr));
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 0 var(--radius) var(--radius) var(--radius);
+  background: var(--surface);
+}
+.planning-hdr--overdue  + .planning-card-grid { border-color: #f44336; }
+.planning-hdr--now      + .planning-card-grid { border-color: var(--primary-light); }
+.planning-hdr--soon     + .planning-card-grid { border-color: var(--accent); }
+
+.planning-card {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.planning-urg--overdue  { border-left: 4px solid #f44336; }
+.planning-urg--now      { border-left: 4px solid var(--primary-light); }
+.planning-urg--soon     { border-left: 4px solid var(--accent); }
+.planning-urg--upcoming { border-left: 4px solid var(--border); }
+
+.planning-card-plant {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.planning-card-emoji {
+  font-size: 1.5rem;
+  flex-shrink: 0;
+  line-height: 1;
+}
+.planning-card-names {
+  flex: 1;
+  min-width: 0;
+}
+.planning-card-names strong {
+  display: block;
+  font-size: .84rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.planning-card-bed {
+  font-size: .68rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.planning-type-badge {
+  font-size: .6rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  padding: 2px 7px;
+  border-radius: 999px;
+  white-space: nowrap;
+  flex-shrink: 0;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+}
+.planning-badge--buy   { background: #fff3cd; border-color: var(--accent); color: #7a4f00; }
+.planning-badge--tray  { background: #e3f2fd; border-color: #90caf9; color: #1a5276; }
+.planning-badge--sow   { background: #fff8e1; border-color: #ffe082; color: #5c3d00; }
+.planning-badge--germ  { background: #e8f5e9; border-color: #a5d6a7; color: var(--primary-dark); }
+.planning-badge--trans { background: #e0f2f1; border-color: #80cbc4; color: #1b4332; }
+.planning-badge--maint { background: #e3f2fd; border-color: #90caf9; color: #1a5276; }
+.planning-badge--harv  { background: #f9fbe7; border-color: #dce775; color: #33691e; }
+.planning-badge--prep  { background: #fff8e1; border-color: var(--accent); color: #5c3d00; }
+
+.planning-count {
+  font-size: .72rem;
+  font-weight: 700;
+  color: var(--primary-dark);
+  background: var(--surface2);
+  padding: 1px 6px;
+  border-radius: 999px;
+  margin-left: 4px;
+  white-space: nowrap;
+}
+.planning-badges {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  align-items: flex-end;
+  flex-shrink: 0;
+}
+.planning-card-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 2px;
+}
+.btn-ghost {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+}
+.btn-ghost:hover {
+  background: var(--surface2);
+  color: var(--text);
+}

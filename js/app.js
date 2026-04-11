@@ -344,6 +344,37 @@ const HelpUI = (() => {
       <li>♾️ <strong>Perennial</strong> — lives multiple years. Always shows seasonal stages; set dormant months in the plant editor.</li>
     </ul>
 
+    <h4 style="margin:0 0 6px;color:var(--primary-dark)">📋 Planning</h4>
+    <ul style="margin:0 0 14px 18px;padding:0">
+      <li>Open the <strong>📋 Planning</strong> tab to see a smart to-do list built from your current bed layout and today's date.</li>
+      <li>Tasks are generated automatically — no manual entry needed. The planner looks at every placed plant, its current lifecycle state, the seasonal stage for this month, and your seed inventory.</li>
+      <li><strong>Urgency groups:</strong>
+        <ul style="margin:4px 0 0 16px">
+          <li>⚠ <strong>Overdue</strong> — action was needed in a previous month (e.g. a tray that should have been started).</li>
+          <li>🌱 <strong>Do Now</strong> — action is due this month.</li>
+          <li>⏰ <strong>Coming Up</strong> — action is needed next month — good time to prepare.</li>
+          <li>📅 <strong>Upcoming</strong> — action is on the horizon but not urgent yet.</li>
+        </ul>
+      </li>
+      <li>Cards are grouped by <strong>plant type</strong>. If you have 30 carrots planned across multiple beds, they appear as one card — <em>Carrot ×30</em> — with a single action button that updates all of them at once.</li>
+      <li><strong>Task types:</strong>
+        <ul style="margin:4px 0 0 16px">
+          <li>🛒 <strong>Buy Seeds</strong> — a planned plant has no seed packet in inventory. Go to the Seeds tab to add one.</li>
+          <li>🌰 <strong>Direct Sow</strong> — plant seeds directly in the bed; it's sowing time.</li>
+          <li>🪴 <strong>Start Tray</strong> — start seeds in a seed tray for later transplanting. Shown when the plant's preferred method is <em>Transplant</em> and it's sowing/indoor-start time.</li>
+          <li>🌱 <strong>Check Germination</strong> — seeds were sown or trayed; check if they have sprouted. Urgency increases based on the plant's expected germination window.</li>
+          <li>🌿 <strong>Transplant</strong> — seedlings are ready; move them from tray to bed.</li>
+          <li>💧 <strong>Maintain</strong> — plant is actively growing; water, check for pests, add compost as needed.</li>
+          <li>🧺 <strong>Harvest</strong> — it's harvest time for this crop.</li>
+          <li>⏰ <strong>Prep Harvest</strong> — harvest is next month; prepare tools, containers, or storage.</li>
+        </ul>
+      </li>
+      <li>The planting method (direct sow vs. tray start) comes from the <strong>Preferred planting method</strong> field in the plant editor. If not set, direct sow is assumed. Plants with <em>tr: none</em> (e.g. Carrot, Garlic) are always direct sow regardless of the setting.</li>
+      <li>Click <strong>✓ [action]</strong> on a card to advance all matching plants to the next lifecycle state in one click. A journal event is recorded for each plant updated.</li>
+      <li>Use the <strong>bed filter</strong> dropdown to focus the planning list on a single bed.</li>
+      <li>Click <strong>↺ Refresh</strong> to regenerate tasks after making changes in other tabs.</li>
+    </ul>
+
     <h4 style="margin:0 0 6px;color:var(--primary-dark)">📊 Stats</h4>
     <ul style="margin:0 0 14px 18px;padding:0">
       <li>Open the <strong>Stats</strong> tab to see a summary of your garden across all beds and seed packets.</li>
@@ -1047,7 +1078,7 @@ async function updateBackupAlert() {
 // ================================================================
 // TAB ROUTING
 // ================================================================
-const TABS = ['beds', 'inventory', 'plants', 'calendar', 'stats', 'journal'];
+const TABS = ['beds', 'inventory', 'plants', 'calendar', 'stats', 'planning', 'journal'];
 
 function switchTab(name) {
   TABS.forEach(t => {
@@ -1059,6 +1090,7 @@ function switchTab(name) {
   if (name === 'plants')    CustomPlants.render();
   if (name === 'calendar')  CalendarView.render();
   if (name === 'stats')     StatsView.render();
+  if (name === 'planning')  PlanningView.render();
   if (name === 'journal')   Beds.renderBedJournal();
 }
 
