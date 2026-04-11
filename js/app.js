@@ -1059,12 +1059,6 @@ const SettingsUI = (() => {
   };
 })();
 
-// ── close modals on overlay click ────────────────────────────────
-document.addEventListener('click', e => {
-  if (e.target.classList.contains('modal-overlay')) {
-    e.target.classList.remove('open');
-  }
-});
 
 // ── Backup alert badge ────────────────────────────────────────────
 async function updateBackupAlert() {
@@ -1180,7 +1174,7 @@ const CustomPlants = (() => {
         <td class="plants-table-actions">
           <button class="btn btn-secondary btn-sm" onclick="CustomPlants.openEdit('${p.id}')">Edit</button>
           <button class="btn btn-secondary btn-sm" onclick="CustomPlants.cloneP('${p.id}')">Copy</button>
-          <button class="btn btn-primary btn-sm" onclick="Inventory.openModal({plantId:'${p.id}'})" title="Create seed packet for this plant">seed+</button>
+          <button class="btn btn-primary btn-sm" onclick="Inventory.openNewForPlant('${p.id}')" title="Create seed packet for this plant">seed+</button>
           ${deleteBtn}
         </td>
       </tr>`;

@@ -264,6 +264,14 @@ const Inventory = (() => {
     openModal(null);
   }
 
+  // Opens a blank new-seed form with the plant dropdown pre-selected.
+  // Uses the same auto-generated seed tag as the regular "Add Seeds" path.
+  function openNewForPlant(plantId) {
+    openModal(null);
+    const sel = document.getElementById('im-plant');
+    if (sel && plantId) sel.value = plantId;
+  }
+
   function openEdit(id) {
     openModal(Store.getInventory().find(s => s.id === id));
   }
@@ -508,7 +516,7 @@ const Inventory = (() => {
   }
 
   return {
-    render, adjustQty, setQty, deleteSeed, openNew, openEdit, openModal, onSearch, onFilter, onGerminationFilter, onSortChange, cloneSeed,
+    render, adjustQty, setQty, deleteSeed, openNew, openNewForPlant, openEdit, openModal, onSearch, onFilter, onGerminationFilter, onSortChange, cloneSeed,
     handleImageLoad, handleImageError, previewImageFile, usePickedFilename, syncImageHint, openImageLightbox,
   };
 })();
