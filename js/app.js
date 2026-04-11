@@ -302,7 +302,9 @@ const HelpUI = (() => {
     <ul style="margin:0 0 14px 18px;padding:0">
       <li><strong>Hover</strong> over a placed plant to preview its details without selecting it.</li>
       <li><strong>Click</strong> a plant to select it and access lifecycle controls.</li>
-      <li>Ctrl+click or Shift+click to select <strong>multiple plants</strong> and update their lifecycle together.</li>
+      <li><strong>Ctrl+click</strong> to add or remove individual plants from the selection. <strong>Shift+click</strong> to select a rectangular range of plants.</li>
+      <li>With multiple plants selected, the Growth Status section shows the count and lets you update all lifecycles in one action.</li>
+      <li>Click the red <strong>🗑️ Delete N selected plants</strong> button (bottom of Growth Status) to remove all selected plants at once — a confirmation prompt appears before anything is deleted.</li>
       <li>Shows: lifecycle badge, crop rotation group, seasonal stage (current month), growth status, seed packet, companions, and row details.</li>
       <li>Click <strong>✏️ Edit plant</strong> (top of the panel) to modify the plant definition globally.</li>
     </ul>

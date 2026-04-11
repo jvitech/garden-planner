@@ -100,6 +100,7 @@
         <button id="rotate-selection-btn" class="btn btn-secondary" style="font-size:.76rem" onclick="Beds.rotateSelection()" title="Rotate rectangular footprint (R)" disabled>⤾ Rotate <span id="rotationLabel">0°</span></button>
         <button class="btn btn-secondary" style="font-size:.76rem" onclick="Beds.undo()" title="Ctrl+Z">↩ Undo</button>
         <button class="btn btn-secondary" style="font-size:.76rem" onclick="Beds.redo()" title="Ctrl+Y">↪ Redo</button>
+        <button id="multi-delete-btn" class="btn btn-danger" style="font-size:.76rem;display:none" onclick="Beds.removeSelectedPlants()" title="Delete all selected plants">🗑️ Delete <span id="multi-delete-count"></span></button>
         <div class="toolbar-sep"></div>
         <span style="font-size:.73rem;color:var(--text-muted)">Each cell = <strong>10×10 cm</strong> · Small plants show <strong>×N</strong> density · Press <strong>R</strong> to rotate rectangular plants · Drag planted cells to move · Hold left click + drag to place many</span>
       </div>

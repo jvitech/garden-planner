@@ -1090,6 +1090,19 @@ const Beds = (() => {
 
   function clearInstanceFocus() {
     document.querySelectorAll('.gcell.instance-focus').forEach(el => el.classList.remove('instance-focus'));
+    _syncMultiDeleteBtn(0);
+  }
+
+  function _syncMultiDeleteBtn(count) {
+    const btn = document.getElementById('multi-delete-btn');
+    const lbl = document.getElementById('multi-delete-count');
+    if (!btn) return;
+    if (count > 1) {
+      if (lbl) lbl.textContent = `${count} plants`;
+      btn.style.display = '';
+    } else {
+      btn.style.display = 'none';
+    }
   }
 
   function syncLegendVisibility() {
@@ -1154,6 +1167,7 @@ const Beds = (() => {
         el.classList.add('instance-focus');
       });
     });
+    _syncMultiDeleteBtn(selectedLifecycleInstances.length);
   }
 
   function clearInstanceHover() {
@@ -2512,6 +2526,7 @@ const Beds = (() => {
     if (!target) return;
     pushUndo(bedId, bed);
     removePlantInstance(bed, r, c);
+    Store.removeCurrentSeasonEventsForInstance(target.instanceId, bedId);
     selectedLifecycleInstances = selectedLifecycleInstances.filter(t => !(t.bedId === bedId && t.instanceId === target.instanceId));
     if (selectedLifecycleInstances.length) {
       lastClickedInstance = selectedLifecycleInstances[selectedLifecycleInstances.length - 1];
@@ -2553,6 +2568,7 @@ const Beds = (() => {
       const [r, c] = key.split(',').map(Number);
       pushUndo(bedId, bed);
       removePlantInstance(bed, r, c);
+      Store.removeCurrentSeasonEventsForInstance(instanceId, bedId);
       touchedIds.add(bedId);
     });
 
@@ -2846,9 +2862,6 @@ const Beds = (() => {
             })()}
           </select>
         </div>
-        ${selectionCount > 1
-          ? `<button class="btn btn-danger btn-sm" style="margin-top:8px;width:100%" onclick="Beds.removeSelectedPlants()">🗑️ Delete ${selectionCount} selected plants</button>`
-          : ''}
         ${timelineHtml}
       </div>`;
     }

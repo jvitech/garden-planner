@@ -197,6 +197,22 @@ const Store = (() => {
     saveLifecycleJournal(list);
   }
 
+  function removeCurrentSeasonEventsForInstance(instanceId, bedId) {
+    const year = ((() => {
+      const s = load(KEYS.settings, {});
+      const fromDates = [s.lastFrost, s.firstFrost]
+        .filter(Boolean)
+        .map(v => new Date(v + 'T12:00:00').getFullYear())
+        .find(y => Number.isFinite(y));
+      return fromDates || new Date().getFullYear();
+    })());
+    saveLifecycleJournal(
+      getLifecycleJournal().filter(e =>
+        !(e.instanceId === instanceId && e.bedId === bedId && e.seasonYear === year)
+      )
+    );
+  }
+
   function getLifecycleEventsForBedYear(bedId, seasonYear) {
     return getLifecycleJournal()
       .filter(e => e.bedId === bedId && e.seasonYear === seasonYear)
@@ -333,7 +349,7 @@ const Store = (() => {
     getCustomPlants, saveCustomPlants, upsertCustomPlant, deleteCustomPlant,
     getBuiltinPlantOverrides, saveBuiltinPlantOverrides, upsertBuiltinPlantOverride, deleteBuiltinPlantOverride,
     getInventory, saveInventory, upsertSeed, deleteSeed, adjustSeedQty,
-    getLifecycleJournal, saveLifecycleJournal, addLifecycleEvent, getLifecycleEventsForBedYear,
+    getLifecycleJournal, saveLifecycleJournal, addLifecycleEvent, getLifecycleEventsForBedYear, removeCurrentSeasonEventsForInstance,
     getSettings, saveSettings,
     getBedHistory, saveBedHistory, archiveSeason, getFamiliesInBedYear, getBedHistoryForBed,
     exportAll, importAll,
