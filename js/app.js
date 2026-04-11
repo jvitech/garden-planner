@@ -239,7 +239,13 @@ const Modal = (() => {
 const HelpUI = (() => {
   const HELP_HTML = `
     <h3 style="margin:0 0 4px">🌱 Garden Planner — User Guide</h3>
-    <p style="margin:0 0 14px;color:var(--text-muted);font-size:.78rem">Offline-first planner for beds, seeds, lifecycle tracking, and seasonal planning.</p>
+    <p style="margin:0 0 10px;color:var(--text-muted);font-size:.78rem">Offline-first planner for beds, seeds, lifecycle tracking, and seasonal planning.</p>
+    <p style="margin:0 0 14px;padding:8px 10px;background:#fff3cd;border:1px solid #f5c800;border-radius:6px;font-size:.78rem">
+      ⚠️ <strong>All data is stored in your browser's localStorage.</strong> It is tied to this specific browser and browser profile.
+      If you switch to a different browser, a different browser profile, clear site data, or use a private/incognito window,
+      your gardens will not be there. <strong>Always use Backup to export your data regularly.</strong>
+      See <strong>💾 Backup &amp; Restore</strong> below to set up automatic backups.
+    </p>
 
     <h4 style="margin:0 0 6px;color:var(--primary-dark)">⚡ Quick Start</h4>
     <ol style="margin:0 0 14px 18px;padding:0">
@@ -254,7 +260,7 @@ const HelpUI = (() => {
     <ul style="margin:0 0 14px 18px;padding:0">
       <li><strong>Bed</strong> — standard raised bed or in-ground patch.</li>
       <li><strong>Plot</strong> — large area divided into named sub-zones. Use ➕ Add bed to draw zones, then select a zone before planting.</li>
-      <li><strong>Seed Tray</strong> — tracks seedlings before transplanting. Link tray plants to bed plants in Plant Details.</li>
+      <li><strong>Seed Tray</strong> — tracks seedlings before transplanting. Each cell holds exactly one plant regardless of its normal footprint size. Link tray plants to bed plants via the <em>Source from tray</em> section in Plant Details.</li>
     </ul>
 
     <h4 style="margin:0 0 6px;color:var(--primary-dark)">🌿 Placing Plants</h4>
@@ -338,11 +344,32 @@ const HelpUI = (() => {
       <li>♾️ <strong>Perennial</strong> — lives multiple years. Always shows seasonal stages; set dormant months in the plant editor.</li>
     </ul>
 
-    <h4 style="margin:0 0 6px;color:var(--primary-dark)">💾 Backups & Profiles</h4>
+    <h4 style="margin:0 0 6px;color:var(--primary-dark)">📊 Stats</h4>
     <ul style="margin:0 0 14px 18px;padding:0">
-      <li>Use <strong>Backup / Restore</strong> in the header for manual JSON export/import.</li>
-      <li>Connect a backup folder in <strong>Settings</strong> for automatic periodic backups with retention rules.</li>
-      <li>Create and switch between multiple <strong>garden profiles</strong> in Settings. The active profile name appears in the header.</li>
+      <li>Open the <strong>Stats</strong> tab to see a summary of your garden across all beds and seed packets.</li>
+      <li><strong>Bed summary table</strong> — one row per bed showing: area (m²), total cells, occupied cells, number of distinct plants, variety count, families, and a success rate (harvested vs. total placed).</li>
+      <li><strong>Plant performance</strong> — per-plant rows listing how many were placed, germinated, harvested, or failed across all beds. Useful for spotting which varieties thrive or struggle in your conditions.</li>
+      <li><strong>Seed performance</strong> — per-seed-packet stats including germination rate (%), germination speed (average days), harvest success rate, and counts of started / direct sow / tray seeded / transplanted / harvested / failed. Packets with no events yet show <em>n/a</em>.</li>
+      <li><strong>Season comparison</strong> — pick a second season year to compare metrics side-by-side. Arrows (↑ / ↓) highlight improvements or regressions.</li>
+      <li>Use the <strong>Bed filter</strong> and <strong>Season filter</strong> dropdowns at the top to narrow the view to a specific bed or year. A text search box filters plant and seed rows by name.</li>
+    </ul>
+
+    <h4 style="margin:0 0 6px;color:var(--primary-dark)">📒 Journal</h4>
+    <ul style="margin:0 0 14px 18px;padding:0">
+      <li>Open the Journal from the <strong>📒 Journal</strong> button on any bed header, or switch to the Journal tab.</li>
+      <li>Shows a <strong>chronological event timeline</strong> for lifecycle transitions — every time you move a plant through a lifecycle phase (e.g. Planned → Germinated → Harvested) an event is recorded with its date.</li>
+      <li>Filter by <strong>Bed</strong> (dropdown) and <strong>Season year</strong> to focus on one bed or one growing season at a time.</li>
+      <li>Use the <strong>Date range</strong> pickers to narrow events to a specific window — handy at the end of a season to review what happened in a particular month.</li>
+      <li>The <strong>Search</strong> box filters events by plant name or notes so you can quickly find all entries for a specific crop.</li>
+      <li>Events can have an optional <strong>photo attachment</strong> (stored as a URL or data URI) — tap the camera icon on an event to add or view a photo.</li>
+      <li>Journal data is included in Backup exports and can be reviewed across seasons for pattern recognition and planning.</li>
+    </ul>
+
+    <h4 style="margin:0 0 6px;color:var(--primary-dark)">💾 Backup &amp; Restore</h4>
+    <ul style="margin:0 0 14px 18px;padding:0">
+      <li>Use <strong>Backup / Restore</strong> in the header for manual JSON export/import. This is the safest way to preserve your data across browsers or devices.</li>
+      <li>Connect a backup folder in <strong>Settings</strong> for automatic periodic backups with configurable retention rules (daily, weekly, monthly points).</li>
+      <li>Create and switch between multiple <strong>garden profiles</strong> in Settings — useful for separate gardens or planning seasons. The active profile name appears in the header. Note that switching profiles does not move your data; each profile is independent within the same browser.</li>
     </ul>
 
     <h4 style="margin:0 0 6px;color:var(--primary-dark)">⌨️ Keyboard Shortcuts</h4>
@@ -1172,7 +1199,7 @@ const CustomPlants = (() => {
 
   function openModal(existing) {
     const allPlants = PlantDB.all();
-    const multiOpts = id => allPlants.map(p =>
+    const multiOpts = () => allPlants.map(p =>
       `<option value="${p.id}">${p.emoji} ${escHtml(p.name)}</option>`).join('');
 
     // build good/bad multi-selects
@@ -2289,12 +2316,7 @@ const StatsView = (() => {
 
     const rows = buildPlantRows(seasonEvents, scopedBeds, seasonFilter === 'current', selectedFilterSet);
     const compareRows = compareActive ? buildPlantRows(compareEvents, scopedBeds, compareYear === 'current', selectedFilterSet) : [];
-    const comparePlantMap = new Map(compareRows.map(row => [row.pid, row]));
     const compareBedMap = new Map((compareSnapshot?.bedRows || []).map(row => [row.id || row.name, row]));
-
-    const filteredRows = filterText
-      ? rows.filter(r => r.name.toLowerCase().includes(filterText) || r.pid.toLowerCase().includes(filterText))
-      : rows;
 
     // Plant details section follows the global Filters scope.
     const plantSectionRows = rows;
@@ -2309,9 +2331,6 @@ const StatsView = (() => {
       : plantSectionRows;
 
     const totalEvents = seasonEvents.length;
-    const harvested = rows.reduce((a, r) => a + r.harvested, 0);
-    const failed    = rows.reduce((a, r) => a + r.failed, 0);
-    const overall   = harvested + failed ? Math.round((harvested / (harvested + failed)) * 100) : null;
 
     // ── Seed performance ─────────────────────────────────────────
     const seedsInScope = bedFilter === 'all'
@@ -2765,8 +2784,7 @@ function importPlants() {
 }
 
 function exportTextPlan() {
-  const beds   = Store.getBeds();
-  const custom = Store.getCustomPlants();
+  const beds = Store.getBeds();
   if (!beds.length) { Toast.show('No beds to export'); return; }
 
   let txt = `GARDEN PLAN — exported ${new Date().toLocaleDateString()}\n`;
