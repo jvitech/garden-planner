@@ -47,4 +47,4 @@ GUIDE.md            In-app help guide (also accessible via the Help button)
 
 ## License
 
-GNU General Public License v3.0 — see [GPLv3.txt](GPLv3.txt).
+GNU General Public License v3.0 — see [License](License).
