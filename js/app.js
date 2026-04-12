@@ -323,6 +323,17 @@ const HelpUI = (() => {
       <li>To disable rotation tracking for a plant, set the <strong>Crop rotation family</strong> dropdown to <em>⛔ Disabled</em> in the plant editor.</li>
     </ul>
 
+    <h4 style="margin:0 0 6px;color:var(--primary-dark)">📆 Archive Season &amp; New Season Reset</h4>
+    <ul style="margin:0 0 14px 18px;padding:0">
+      <li>Click <strong>📆 Archive Season</strong> in the header at the end of a growing season. You will be prompted for the year to archive (e.g. 2026).</li>
+      <li><strong>What gets saved:</strong> a snapshot of every bed is written to rotation history — which botanical families were in each bed, how many plants were placed, and their lifecycle outcomes. This data drives the 3-year rotation warnings and the Archived Seasons table in Stats.</li>
+      <li><strong>What gets reset:</strong> all annual plants and succession layers are removed from every bed; seed trays are cleared entirely. Your beds and their structure are kept.</li>
+      <li><strong>What is kept:</strong> perennial plants (e.g. asparagus, herbs, fruit) and paths/infrastructure remain in place; their lifecycle is reset to <em>Planned</em> ready for the new season.</li>
+      <li><strong>Journal:</strong> current-season journal entries for the removed annual plants are purged. Entries from previous archived seasons are untouched.</li>
+      <li><strong>Seed inventory:</strong> all seed packets and their quantities are preserved — nothing is deducted or removed during an archive.</li>
+      <li><strong>Backup:</strong> a full JSON backup named <em>backup-before-archive-season-[year].json</em> is downloaded automatically before any data is changed. Keep this file if you ever need to restore the season.</li>
+    </ul>
+
     <h4 style="margin:0 0 6px;color:var(--primary-dark)">🗺️ Plot Beds & Zones</h4>
     <ul style="margin:0 0 14px 18px;padding:0">
       <li>Click <strong>➕ Add bed</strong> on a Plot bed to draw a named sub-zone by clicking two opposite corners.</li>
@@ -381,8 +392,9 @@ const HelpUI = (() => {
     <ul style="margin:0 0 14px 18px;padding:0">
       <li>Open the <strong>Stats</strong> tab to see a summary of your garden across all beds and seed packets.</li>
       <li><strong>Bed summary table</strong> — one row per bed showing: area (m²), total cells, occupied cells, number of distinct plants, variety count, families, and a success rate (harvested vs. total placed).</li>
-      <li><strong>Plant performance</strong> — per-plant rows listing how many were placed, germinated, harvested, or failed across all beds. Useful for spotting which varieties thrive or struggle in your conditions.</li>
-      <li><strong>Seed performance</strong> — per-seed-packet stats including germination rate (%), germination speed (average days), harvest success rate, and counts of started / direct sow / tray seeded / transplanted / harvested / failed. Packets with no events yet show <em>n/a</em>.</li>
+      <li><strong>Plant performance</strong> — per-plant rows listing how many were placed, germinated, harvested, or failed across all beds. After an Archive Season reset, only active plants (perennials still in beds) will appear until new plants are placed for the new season.</li>
+      <li><strong>Seed performance</strong> — per-seed-packet stats including germination rate (%), germination speed (average days), harvest success rate, and counts of started / direct sow / tray seeded / transplanted / harvested / failed. Seed performance data is <strong>never cleared</strong> by an archive — it accumulates across all seasons.</li>
+      <li><strong>Archived Seasons</strong> — once you archive a season, a historical record appears here showing which families were grown in each bed and their lifecycle outcomes. Use the <strong>Season filter</strong> dropdown to view any past year. Archived records are never modified or deleted by future archives.</li>
       <li><strong>Season comparison</strong> — pick a second season year to compare metrics side-by-side. Arrows (↑ / ↓) highlight improvements or regressions.</li>
       <li>Use the <strong>Bed filter</strong> and <strong>Season filter</strong> dropdowns at the top to narrow the view to a specific bed or year. A text search box filters plant and seed rows by name.</li>
     </ul>
@@ -2888,24 +2900,35 @@ window.addEventListener('gp:data-changed', event => {
 });
 
 // ================================================================
-// CROP ROTATION — archive current season
+// CROP ROTATION — archive current season and start new one
 // ================================================================
-function archiveSeason() {
+function archiveSeasonOpen() {
   const defaultYear = new Date().getFullYear();
-  const input = prompt(`Archive planting for year:\n(Saves which botanical families are in each bed for future rotation warnings.)`, defaultYear);
+  const input = prompt('Archive season — enter the year to save (e.g. ' + defaultYear + '):', defaultYear);
   if (input === null) return;
   const year = parseInt(input, 10);
   if (!year || isNaN(year) || year < 2000 || year > 2100) {
-    alert('Please enter a valid year (e.g. 2026).');
+    alert('Please enter a valid year (e.g. ' + defaultYear + ').');
     return;
   }
-  exportBackup(`archive-season-${year}-pre-archive.json`, `Pre-archive backup for ${year} downloaded`);
+
+  // Step 1 — backup before touching anything
+  exportBackup('backup-before-archive-season-' + year + '.json', 'Pre-archive backup downloaded');
+
+  // Step 2 — archive current planting to rotation history
   const newEntries = Store.archiveSeason(year, id => PlantDB.get(id));
-  if (!newEntries.length) {
-    Toast.show(`No plants in beds to archive for ${year}`);
-    return;
-  }
-  Toast.show(`Season ${year} archived (${newEntries.length} bed${newEntries.length !== 1 ? 's' : ''})`);
+
+  // Step 3 — start new season: remove annuals, clear trays, reset perennial lifecycle
+  const summary = Store.startNewSeason(id => PlantDB.get(id));
+
+  Beds.init();
+
+  const bedWord = newEntries.length === 1 ? 'bed' : 'beds';
+  Toast.show(
+    'Season ' + year + ' archived (' + newEntries.length + ' ' + bedWord + '). ' +
+    'Removed ' + summary.removedInstances + ' annual plant' + (summary.removedInstances !== 1 ? 's' : '') + ', ' +
+    'kept ' + summary.keptPerennials + ' perennial' + (summary.keptPerennials !== 1 ? 's' : '') + '.'
+  );
 }
 
 // ================================================================

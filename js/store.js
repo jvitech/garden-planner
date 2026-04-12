@@ -219,6 +219,106 @@ const Store = (() => {
       .sort((a, b) => (a.ts < b.ts ? 1 : -1));
   }
 
+  // Batch version: removalMap is Map<bedId, Set<instanceId>>
+  function removeCurrentSeasonEventsForInstances(removalMap) {
+    const s = load(KEYS.settings, {});
+    const year = [s.lastFrost, s.firstFrost]
+      .filter(Boolean)
+      .map(v => new Date(v + 'T12:00:00').getFullYear())
+      .find(y => Number.isFinite(y)) || new Date().getFullYear();
+    saveLifecycleJournal(
+      getLifecycleJournal().filter(e => {
+        const ids = removalMap.get(e.bedId);
+        return !(ids && ids.has(e.instanceId) && e.seasonYear === year);
+      })
+    );
+  }
+
+  // Start a new growing season.
+  // - Non-tray beds: removes all annual cells; resets perennial/infra lifecycle to 'planned'
+  // - Tray beds: cleared entirely
+  // - successionCells cleared for all beds
+  // - transplantSource back-links cleared on kept cells
+  // - Current-season journal entries for removed instances are purged (batch)
+  // plantLookup: (plantId) => plant object  (caller supplies PlantDB.get)
+  function startNewSeason(plantLookup) {
+    const beds   = getBeds();
+    let removedInstances = 0;
+    let keptPerennials   = 0;
+    let bedsModified     = 0;
+
+    // Build removalMap for batch journal cleanup
+    const removalMap = new Map();
+
+    beds.forEach(bed => {
+      const isTray = bed.type === 'tray';
+
+      if (isTray) {
+        // Count removed instances before clearing
+        const removedIds = new Set();
+        Object.values(bed.cells || {}).forEach(cell => {
+          if (typeof cell === 'object' && cell?.origin && cell?.instanceId) {
+            removedIds.add(cell.instanceId);
+          }
+        });
+        if (removedIds.size > 0) {
+          removalMap.set(bed.id, removedIds);
+          removedInstances += removedIds.size;
+          bedsModified++;
+        }
+        bed.cells = {};
+        bed.successionCells = {};
+        return;
+      }
+
+      // Non-tray bed: two-pass
+      const removedIds = new Set();
+      const newCells   = {};
+
+      Object.entries(bed.cells || {}).forEach(([key, raw]) => {
+        const isOriginLike = typeof raw === 'string' || (typeof raw === 'object' && raw?.origin);
+        const pid = typeof raw === 'string' ? raw : raw?.plantId;
+        const plant = pid ? plantLookup(pid) : null;
+        const keep  = plant && (plant.perennial || plant._isPath || plant.cat === 'infrastructure');
+
+        if (keep) {
+          // Reset lifecycle to planned, clear transplant source links
+          if (typeof raw === 'object' && raw !== null) {
+            newCells[key] = {
+              ...raw,
+              lifecycle:                  'planned',
+              transplantSourceBedId:      null,
+              transplantSourceInstanceId: null,
+            };
+          } else {
+            // legacy string-format cell
+            newCells[key] = raw;
+          }
+          if (isOriginLike) keptPerennials++;
+        } else {
+          // Annual — mark for removal
+          if (typeof raw === 'object' && raw?.origin && raw?.instanceId) {
+            removedIds.add(raw.instanceId);
+          }
+        }
+      });
+
+      if (removedIds.size > 0) {
+        removalMap.set(bed.id, removedIds);
+        removedInstances += removedIds.size;
+        bedsModified++;
+      }
+
+      bed.cells           = newCells;
+      bed.successionCells = {};
+    });
+
+    saveBeds(beds);
+    removeCurrentSeasonEventsForInstances(removalMap);
+
+    return { bedsModified, removedInstances, keptPerennials };
+  }
+
   // ── bed planting history (crop rotation) ─────────────────────
   // Entry: {
   //   bedId, bedName, year,
@@ -349,9 +449,9 @@ const Store = (() => {
     getCustomPlants, saveCustomPlants, upsertCustomPlant, deleteCustomPlant,
     getBuiltinPlantOverrides, saveBuiltinPlantOverrides, upsertBuiltinPlantOverride, deleteBuiltinPlantOverride,
     getInventory, saveInventory, upsertSeed, deleteSeed, adjustSeedQty,
-    getLifecycleJournal, saveLifecycleJournal, addLifecycleEvent, getLifecycleEventsForBedYear, removeCurrentSeasonEventsForInstance,
+    getLifecycleJournal, saveLifecycleJournal, addLifecycleEvent, getLifecycleEventsForBedYear, removeCurrentSeasonEventsForInstance, removeCurrentSeasonEventsForInstances,
     getSettings, saveSettings,
-    getBedHistory, saveBedHistory, archiveSeason, getFamiliesInBedYear, getBedHistoryForBed,
+    getBedHistory, saveBedHistory, archiveSeason, startNewSeason, getFamiliesInBedYear, getBedHistoryForBed,
     exportAll, importAll,
   };
 })();
