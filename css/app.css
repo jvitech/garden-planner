@@ -705,6 +705,18 @@ body {
   z-index: 4;
 }
 
+/* Terminated / end-of-season — cell shows a dark diagonal pattern to signal it is freed */
+.gcell.gcell-terminated {
+  opacity: 0.5;
+  background-image: repeating-linear-gradient(
+    45deg,
+    rgba(0,0,0,.08) 0px,
+    rgba(0,0,0,.08) 2px,
+    transparent 2px,
+    transparent 6px
+  ) !important;
+}
+
 /* Dormant cells (perennials) are dimmed — plant is in ground but inactive */
 .gcell.gcell-dormant { opacity: 0.42; }
 

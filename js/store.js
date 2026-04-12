@@ -57,7 +57,7 @@ const Store = (() => {
       heightM:          +heightM,
       cols, rows,
       cells:            {},
-      successionCells:  {},
+      successionSlots:  [],
     };
   }
 
@@ -72,7 +72,7 @@ const Store = (() => {
       heightM:          +heightM,
       cols, rows,
       cells:            {},
-      successionCells:  {},
+      successionSlots:  [],
     };
   }
 
@@ -88,7 +88,7 @@ const Store = (() => {
       cols:             safeCols,
       rows:             safeRows,
       cells:            {},
-      successionCells:  {},
+      successionSlots:  [],
     };
   }
 
@@ -267,7 +267,8 @@ const Store = (() => {
           bedsModified++;
         }
         bed.cells = {};
-        bed.successionCells = {};
+        bed.successionSlots = [];
+        delete bed.successionCells;
         return;
       }
 
@@ -309,8 +310,10 @@ const Store = (() => {
         bedsModified++;
       }
 
-      bed.cells           = newCells;
-      bed.successionCells = {};
+      bed.cells = newCells;
+      // Clear all succession slots (annuals only ever live in succession)
+      bed.successionSlots = [];
+      delete bed.successionCells;
     });
 
     saveBeds(beds);

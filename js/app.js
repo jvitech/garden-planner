@@ -292,10 +292,12 @@ const HelpUI = (() => {
 
     <h4 style="margin:0 0 6px;color:var(--primary-dark)">🔄 Succession Planting</h4>
     <ul style="margin:0 0 14px 18px;padding:0">
-      <li>When a seasonal annual is absent (ghost cell), you can place a different plant over it — it is stored as a <strong>succession plant</strong>.</li>
-      <li>The succession plant shows normally; a tiny ghost emoji in the corner reminds you of the out-of-season primary plant underneath.</li>
-      <li>A dashed orange outline marks succession cells.</li>
-      <li>Clicking the ✕ on a succession cell removes the succession plant, leaving the primary untouched.</li>
+      <li>A cell becomes available for a succession plant when its primary plant is either <strong>out of season</strong> (absent in month view) or in a <strong>terminal lifecycle state</strong> (Harvested one-off, Failed (plant), or End of season).</li>
+      <li>To place a succession plant, switch to a <strong>month view</strong>, select a plant from the library, then click the ghost/absent cell. Seasonal mode is enabled automatically.</li>
+      <li>You can stack <strong>multiple succession plants</strong> on the same cell: if the first succession plant is also absent or terminal, placing again routes to the next slot automatically.</li>
+      <li>Each succession plant tracks its own lifecycle independently — click the cell to select it and update its status just like any primary plant.</li>
+      <li>A dashed orange outline marks succession cells. A tiny ghost emoji in the corner shows what primary plant is underneath.</li>
+      <li>Clicking the ✕ on a cell removes the <strong>currently visible</strong> plant. If a succession plant is showing, it is removed; the primary remains.</li>
     </ul>
 
     <h4 style="margin:0 0 6px;color:var(--primary-dark)">🔍 Plant Details Panel</h4>
@@ -311,7 +313,8 @@ const HelpUI = (() => {
 
     <h4 style="margin:0 0 6px;color:var(--primary-dark)">🌱 Lifecycle Phases</h4>
     <ul style="margin:0 0 14px 18px;padding:0">
-      <li>📋 Planned → 🌰 Direct sow / 🪴 Seedling tray → 🌱 Germinated → 🏺 Ready to transplant → 🌤️ Hardened off → 🌿 Transplanted → 🍃 Growing → 🧺 Harvested → ✂️ Harvesting continuous → 🌾 Gone to seed / ✗ Failed</li>
+      <li>📋 Planned → 🌰 Direct sow / 🪴 Seedling tray → 🌱 Germinated → 🏺 Ready to transplant → 🌤️ Hardened off → 🌿 Transplanted → 🍃 Growing → 🧺 Harvested (one-off) → ✂️ Harvesting continuous → 🌾 Gone to seed / ✗ Failed (germination) / ✗ Failed (plant) → 🔚 End of season</li>
+      <li><strong>🔚 End of season</strong> — marks a plant as done for the year without deleting it. The cell immediately becomes available for succession planting in any view mode. This is also true for <em>Harvested (one-off)</em> and <em>Failed (plant)</em>.</li>
       <li>Phase dates are recorded in the <strong>Phase Dates</strong> timeline in Plant Details.</li>
       <li>Link a tray seedling to a bed plant via the <strong>Source from tray</strong> section to track transplanting.</li>
     </ul>

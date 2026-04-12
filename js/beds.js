@@ -53,7 +53,7 @@ const Beds = (() => {
   const MAX_CELLS  = 150;        // safety cap per axis (supports up to 15 m at 10 cm cells)
 
   // ── lifecycle constants ───────────────────────────────────────
-  const LC_STATES = ['planned', 'direct_sow', 'tray_seeded', 'germinated', 'ready_to_transplant', 'hardened', 'transplanted', 'growing', 'harvested_once', 'harvested_continuous', 'gone_to_seed', 'failed_germination', 'failed_plant'];
+  const LC_STATES = ['planned', 'direct_sow', 'tray_seeded', 'germinated', 'ready_to_transplant', 'hardened', 'transplanted', 'growing', 'harvested_once', 'harvested_continuous', 'gone_to_seed', 'failed_germination', 'failed_plant', 'terminated'];
   const LC_META = {
     planned:              { label:'Planned',              icon:'📋', color:'#9daab5' },
     direct_sow:           { label:'Direct sowing',        icon:'🌰', color:'#1f4e8c' },
@@ -68,15 +68,20 @@ const Beds = (() => {
     gone_to_seed:         { label:'Gone to seed',         icon:'🌾', color:'#111111' },
     failed_germination:   { label:'Failed (germination)',  icon:'🌧️', color:'#d7263d' },
     failed_plant:         { label:'Failed (plant)',        icon:'✗',  color:'#9b1a2a' },
+    terminated:           { label:'End of season',        icon:'🔚', color:'#555e68' },
     // legacy — kept for rendering old data
     failed:               { label:'Failed',               icon:'✗',  color:'#d7263d' },
   };
-  const LC_TIMELINE_ORDER = ['direct_sow', 'tray_seeded', 'germinated', 'ready_to_transplant', 'hardened', 'transplanted', 'growing', 'harvested_once', 'harvested_continuous', 'gone_to_seed', 'failed_germination', 'failed_plant'];
+  const LC_TIMELINE_ORDER = ['direct_sow', 'tray_seeded', 'germinated', 'ready_to_transplant', 'hardened', 'transplanted', 'growing', 'harvested_once', 'harvested_continuous', 'gone_to_seed', 'failed_germination', 'failed_plant', 'terminated'];
+
+  // States that free a cell for the next succession plant (slot becomes available).
+  // Terminal states apply in ANY view mode — no seasonal-mode or month-view required.
+  const TERMINAL_STATES = new Set(['terminated', 'harvested_once', 'failed_plant']);
 
   // States restricted to seed tray beds only.
   const LC_TRAY_ONLY = new Set(['ready_to_transplant', 'hardened']);
   // States not shown in seed tray beds (end-of-life garden states).
-  const LC_NORMAL_ONLY = new Set(['direct_sow', 'growing', 'harvested_once', 'harvested_continuous', 'gone_to_seed', 'failed_plant']);
+  const LC_NORMAL_ONLY = new Set(['direct_sow', 'growing', 'harvested_once', 'harvested_continuous', 'gone_to_seed', 'failed_plant', 'terminated']);
 
   function isSeedTrayBed(bed) { return bed?.type === 'tray'; }
   function isPlotBed(bed)     { return bed?.type === 'plot'; }
@@ -196,13 +201,9 @@ const Beds = (() => {
     const bed = Store.getBeds().find(b => b.id === bedId) || null;
     let instanceContextId = bedId;
     if (bed) {
-      const originEntry = Object.entries(bed.cells || {}).find(([k, v]) => {
-        const cell = normalizeCellValue(v, k);
-        return cell?.origin && cell.instanceId === instanceId;
-      });
-      if (originEntry) {
-        const [originKey, originVal] = originEntry;
-        const ctx = contextFromOriginCell(bed, normalizeCellValue(originVal, originKey), originKey);
+      const foundCtx = findOriginCell(bed, instanceId);
+      if (foundCtx) {
+        const ctx = contextFromOriginCell(bed, normalizeCellValue(foundCtx.cell, foundCtx.key), foundCtx.key);
         instanceContextId = ctx.bedContextId || bedId;
       }
     }
@@ -330,17 +331,99 @@ const Beds = (() => {
     return count;
   }
 
-  // Returns true if the cell is an annual seasonal plant that is absent this month (slot appears free)
-  function isCellAbsent(cell, plant) {
+  // Returns true if the cell is absent — either a terminal lifecycle state (always) or
+  // a seasonal annual that is out-of-season in the current month view.
+  // resolvedLifecycle: pass instanceMeta lifecycle when available to cover non-origin cells.
+  function isCellAbsent(cell, plant, resolvedLifecycle) {
     if (!cell || !plant || plant._isPath) return false;
+    const lc = resolvedLifecycle || cell.lifecycle || 'planned';
+    // Terminal states free the slot regardless of view mode
+    if (TERMINAL_STATES.has(lc)) return true;
+    // Seasonal absence: requires month view, non-perennial, seasonalMode flag
     if (selectedViewMonth === null) return false;
-    if (plant.perennial) return false; // perennial is dormant-but-present, not absent
+    if (plant.perennial) return false;
     if (!cell.seasonalMode) return false;
     return getSeasonalStage(plant, selectedViewMonth) === 'dormant';
   }
 
+  // ── succession slot helpers ───────────────────────────────────
+
+  // One-time migration: move legacy bed.successionCells → bed.successionSlots[0]
+  function migrateLegacySuccessionCells(bed) {
+    if (bed.successionCells && Object.keys(bed.successionCells).length > 0) {
+      if (!bed.successionSlots) bed.successionSlots = [];
+      if (!bed.successionSlots[0]) {
+        bed.successionSlots.unshift({ cells: bed.successionCells });
+      }
+      delete bed.successionCells;
+    } else if (!bed.successionSlots) {
+      bed.successionSlots = [];
+      delete bed.successionCells;
+    }
+  }
+
+  function getSuccessionSlots(bed) {
+    migrateLegacySuccessionCells(bed);
+    return bed.successionSlots;
+  }
+
+  // Find an origin cell for instanceId across primary cells and all succession slots.
+  // Returns { cells, key, cell, slotIndex } where slotIndex = -1 for primary.
+  function findOriginCell(bed, instanceId) {
+    for (const [k, v] of Object.entries(bed.cells || {})) {
+      if (typeof v === 'object' && v?.instanceId === instanceId && v?.origin) {
+        return { cells: bed.cells, key: k, cell: v, slotIndex: -1 };
+      }
+    }
+    const slots = getSuccessionSlots(bed);
+    for (let si = 0; si < slots.length; si++) {
+      const slotCells = slots[si].cells || {};
+      for (const [k, v] of Object.entries(slotCells)) {
+        if (typeof v === 'object' && v?.instanceId === instanceId && v?.origin) {
+          return { cells: slotCells, key: k, cell: v, slotIndex: si };
+        }
+      }
+    }
+    return null;
+  }
+
+  // Determine the first slot index that is free (all cells absent/empty) for a footprint.
+  // Returns -1 if primary is not absent (place in primary).
+  // Returns 0..N for succession slot index.
+  function getTargetSlotIndex(bed, startR, startC, fp) {
+    // First verify primary is absent at these cells
+    let primaryAbsent = false;
+    for (let rr = startR; rr < startR + fp.rows && !primaryAbsent; rr++) {
+      for (let cc = startC; cc < startC + fp.cols && !primaryAbsent; cc++) {
+        const key = `${rr},${cc}`;
+        const cell = normalizeCellValue(bed.cells[key], key);
+        if (cell && isCellAbsent(cell, PlantDB.get(cell.plantId))) primaryAbsent = true;
+      }
+    }
+    if (!primaryAbsent) return -1;
+
+    const slots = getSuccessionSlots(bed);
+    for (let si = 0; si < slots.length; si++) {
+      const slotCells = slots[si].cells || {};
+      let slotHasActivePlant = false;
+      for (let rr = startR; rr < startR + fp.rows && !slotHasActivePlant; rr++) {
+        for (let cc = startC; cc < startC + fp.cols && !slotHasActivePlant; cc++) {
+          const key = `${rr},${cc}`;
+          const slotCell = normalizeCellValue(slotCells[key], key);
+          if (slotCell) {
+            const slotPlant = PlantDB.get(slotCell.plantId);
+            if (slotPlant && !isCellAbsent(slotCell, slotPlant)) slotHasActivePlant = true;
+          }
+        }
+      }
+      if (!slotHasActivePlant) return si; // slot is free → place here
+    }
+    return slots.length; // all slots occupied → create new slot
+  }
+
   function canPlaceFootprint(bed, startR, startC, footprint, ignoreInstanceId = null) {
     if (startR + footprint.rows > bed.rows || startC + footprint.cols > bed.cols) return false;
+    const slots = getSuccessionSlots(bed);
     for (let rr = startR; rr < startR + footprint.rows; rr++) {
       for (let cc = startC; cc < startC + footprint.cols; cc++) {
         const key = `${rr},${cc}`;
@@ -348,10 +431,10 @@ const Beds = (() => {
         // Never allow placing on path cells
         if (occupied?.plantId === '__path__') return false;
         if (occupied && occupied.instanceId !== ignoreInstanceId) {
-          // Absent annual cell: allow placement if succession slot is free
+          // Absent cell: allow if at least one succession slot is free at this key
           if (isCellAbsent(occupied, PlantDB.get(occupied.plantId))) {
-            const succOccupied = normalizeCellValue((bed.successionCells || {})[key], key);
-            if (!succOccupied) continue; // succession slot free → allow
+            const slotIdx = getTargetSlotIndex(bed, rr, cc, { rows: 1, cols: 1 });
+            if (slotIdx >= 0) continue; // a slot is available
           }
           return false;
         }
@@ -360,9 +443,16 @@ const Beds = (() => {
     return true;
   }
 
-  function placeFootprint(bed, r, c, plantId, footprint, rotation = 0, instanceId = `inst_${Date.now()}_${Math.random().toString(36).slice(2,7)}`, seedId = null, extraMeta = null, inSuccession = false) {
-    if (inSuccession && !bed.successionCells) bed.successionCells = {};
-    const targetCells = inSuccession ? bed.successionCells : bed.cells;
+  // slotIndex: -1 = primary cells; 0+ = succession slot index
+  function placeFootprint(bed, r, c, plantId, footprint, rotation = 0, instanceId = `inst_${Date.now()}_${Math.random().toString(36).slice(2,7)}`, seedId = null, extraMeta = null, slotIndex = -1) {
+    let targetCells;
+    if (slotIndex < 0) {
+      targetCells = bed.cells;
+    } else {
+      const slots = getSuccessionSlots(bed);
+      while (slots.length <= slotIndex) slots.push({ cells: {} });
+      targetCells = slots[slotIndex].cells;
+    }
     for (let rr = r; rr < r + footprint.rows; rr++) {
       for (let cc = c; cc < c + footprint.cols; cc++) {
         const isOrigin = rr === r && cc === c;
@@ -379,42 +469,44 @@ const Beds = (() => {
 
   function removePlantInstance(bed, r, c) {
     const key = `${r},${c}`;
-    // If there's a succession plant at this position, remove it instead of the absent primary
-    const succCell = normalizeCellValue((bed.successionCells || {})[key], key);
-    if (succCell) {
-      const succId = succCell.instanceId;
-      Object.keys(bed.successionCells).forEach(k => {
-        const sc = normalizeCellValue(bed.successionCells[k], k);
-        if (sc?.instanceId === succId) delete bed.successionCells[k];
-      });
-      return true;
+    const slots = getSuccessionSlots(bed);
+
+    // Walk the chain to find which layer is currently displayed at this cell
+    const primaryCell = normalizeCellValue(bed.cells[key], key);
+    const primaryPlant = primaryCell ? PlantDB.get(primaryCell.plantId) : null;
+    const primaryAbsent = !primaryPlant || isCellAbsent(primaryCell, primaryPlant);
+
+    if (primaryAbsent) {
+      // Find the active succession slot
+      for (let si = 0; si < slots.length; si++) {
+        const slotCells = slots[si].cells || {};
+        const slotCell = normalizeCellValue(slotCells[key], key);
+        const slotPlant = slotCell ? PlantDB.get(slotCell.plantId) : null;
+        if (slotPlant && !isCellAbsent(slotCell, slotPlant)) {
+          const sid = slotCell.instanceId;
+          Object.keys(slotCells).forEach(k => {
+            const sc = normalizeCellValue(slotCells[k], k);
+            if (sc?.instanceId === sid) delete slotCells[k];
+          });
+          return true;
+        }
+      }
     }
-    const clicked = normalizeCellValue(bed.cells[key], key);
-    if (!clicked) return false;
-    const instanceId = clicked.instanceId;
+
+    // Remove from primary cells
+    if (!primaryCell) return false;
+    const instanceId = primaryCell.instanceId;
     Object.entries(bed.cells).forEach(([k, v]) => {
       const cell = normalizeCellValue(v, k);
       if (cell?.instanceId === instanceId) {
         delete bed.cells[k];
-        // Clean up any succession plant sharing this cell
-        if (bed.successionCells?.[k]) delete bed.successionCells[k];
+        // Clean up all succession slots sharing this cell key
+        slots.forEach(slot => { if (slot.cells[k]) delete slot.cells[k]; });
       }
     });
     return true;
   }
 
-  // Returns true if any cell in the footprint is an absent seasonal annual — meaning we should
-  // write the new plant into successionCells rather than the primary cells layer.
-  function shouldPlaceAsSuccession(bed, startR, startC, footprint) {
-    for (let rr = startR; rr < startR + footprint.rows; rr++) {
-      for (let cc = startC; cc < startC + footprint.cols; cc++) {
-        const key = `${rr},${cc}`;
-        const cell = normalizeCellValue(bed.cells[key], key);
-        if (cell && isCellAbsent(cell, PlantDB.get(cell.plantId))) return true;
-      }
-    }
-    return false;
-  }
 
   function clearPreview() {
     previewEls.forEach(el => el.classList.remove('preview-ok', 'preview-blocked', 'preview-origin', 'preview-anchor'));
@@ -1025,7 +1117,12 @@ const Beds = (() => {
     const rowBatchId = `row_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
 
     const context = bedContextForCell(bed, rect.minR, rect.minC, contextZone);
-    const inSuccessionRow = shouldPlaceAsSuccession(bed, rect.minR, rect.minC, blockFp);
+    const rowSlotIndex = getTargetSlotIndex(bed, rect.minR, rect.minC, blockFp);
+    if (rowSlotIndex >= 0 && !armedSeasonalMode) {
+      armedSeasonalMode = true;
+      const cb = document.getElementById('armed-seasonal-mode-cb') || document.querySelector('[onchange*="setArmedSeasonalMode"]');
+      if (cb) cb.checked = true;
+    }
     const instanceId = placeFootprint(
       bed,
       rect.minR,
@@ -1049,7 +1146,7 @@ const Beds = (() => {
         plotZoneId: context.plotZoneId,
         seasonalMode: armedSeasonalMode || undefined,
       },
-      inSuccessionRow
+      rowSlotIndex
     );
 
     if (selectedPlantId !== '__path__') {
@@ -1294,15 +1391,21 @@ const Beds = (() => {
     }
     renderLibrary();
     renderCanvas();
+    // Auto-enable seasonal mode when switching to month view with an annual plant armed
+    if (selectedViewMonth !== null && selectedPlantId && selectedPlantId !== '__path__') {
+      const ap = PlantDB.get(selectedPlantId);
+      if (ap && !ap.perennial && !ap._isPath) {
+        armedSeasonalMode = true;
+        const cb = document.querySelector('[onchange*="setArmedSeasonalMode"]');
+        if (cb) cb.checked = true;
+      }
+    }
     // Refresh details panel so the seasonal stage block reflects the new month
     if (lastClickedInstance) {
       const beds = Store.getBeds();
       const bed = beds.find(b => b.id === lastClickedInstance.bedId);
-      const origin = bed
-        ? (Object.values(bed.cells).find(v => v?.instanceId === lastClickedInstance.instanceId && v?.origin)
-           || Object.values(bed.successionCells || {}).find(v => v?.instanceId === lastClickedInstance.instanceId && v?.origin))
-        : null;
-      if (origin) showPlantInfo(PlantDB.get(origin.plantId), origin.rotation || 0, lastClickedInstance.instanceId, lastClickedInstance.bedId);
+      const found = bed ? findOriginCell(bed, lastClickedInstance.instanceId) : null;
+      if (found) showPlantInfo(PlantDB.get(found.cell.plantId), found.cell.rotation || 0, lastClickedInstance.instanceId, lastClickedInstance.bedId);
     } else if (selectedPlantId) {
       updateSelectedPanel();
     }
@@ -1463,6 +1566,10 @@ const Beds = (() => {
       if (!isRotatable(plant)) selectedRotation = 0;
       const candidates = seedsForPlant(selectedPlantId, false);
       selectedSeedId = candidates[0]?.id || null;
+      // Auto-enable seasonal mode when in month view and arming an annual plant
+      if (selectedViewMonth !== null && plant && !plant.perennial && !plant._isPath) {
+        armedSeasonalMode = true;
+      }
     } else {
       selectedSeedId = null;
     }
@@ -1727,7 +1834,13 @@ const Beds = (() => {
     const effectiveZone = bedIsTray ? null : (zone || (plotLayoutForBed(bed).find(item => zoneContainsFootprint(item, plan.origin.startR, plan.origin.startC, plan.fp)) || null));
     const context = bedContextForCell(bed, plan.origin.startR, plan.origin.startC, effectiveZone);
     const pathMeta = isPath ? { pathColor: pathConfig.color || null, pathDesc: pathConfig.desc || null, blockRows: plan.fp.rows, blockCols: plan.fp.cols } : {};
-    const inSuccession = !isPath && shouldPlaceAsSuccession(bed, plan.origin.startR, plan.origin.startC, plan.fp);
+    const slotIndex = !isPath ? getTargetSlotIndex(bed, plan.origin.startR, plan.origin.startC, plan.fp) : -1;
+    // Succession plants must always carry seasonalMode so they hide at the right time
+    if (slotIndex >= 0 && !armedSeasonalMode) {
+      armedSeasonalMode = true;
+      const cb = document.getElementById('armed-seasonal-mode-cb') || document.querySelector('[onchange*="setArmedSeasonalMode"]');
+      if (cb) cb.checked = true;
+    }
     const instanceId = placeFootprint(
       bed,
       plan.origin.startR,
@@ -1744,7 +1857,7 @@ const Beds = (() => {
         seasonalMode: (!isPath && armedSeasonalMode) || undefined,
         ...pathMeta,
       },
-      inSuccession
+      slotIndex
     );
 
     if (selectedPlantId !== '__path__') {
@@ -2016,32 +2129,33 @@ const Beds = (() => {
       meta.rows = (meta.maxR - meta.minR) + 1;
     });
 
-    // Succession layer — parallel to instanceMeta but for bed.successionCells
-    const succInstanceMeta = {};
-    Object.entries(bed.successionCells || {}).forEach(([key, val]) => {
-      const cell = normalizeCellValue(val, key);
-      if (!cell) return;
-      const [r, c] = key.split(',').map(Number);
-      const existing = succInstanceMeta[cell.instanceId] || {
-        minR: r, maxR: r, minC: c, maxC: c,
-        seedId: null,
-        lifecycle: 'planned',
-        seasonalMode: false,
-      };
-      existing.minR = Math.min(existing.minR, r);
-      existing.maxR = Math.max(existing.maxR, r);
-      existing.minC = Math.min(existing.minC, c);
-      existing.maxC = Math.max(existing.maxC, c);
-      if (cell.origin) existing.seedId = cell.seedId || null;
-      if (cell.origin) existing.lifecycle = cell.lifecycle || 'planned';
-      if (cell.origin) existing.seasonalMode = cell.seasonalMode || false;
-      succInstanceMeta[cell.instanceId] = existing;
-    });
-    Object.values(succInstanceMeta).forEach(meta => {
-      const seed = meta.seedId ? invById.get(meta.seedId) : null;
-      meta.imageSources = seedImageSources(seed);
-      meta.cols = (meta.maxC - meta.minC) + 1;
-      meta.rows = (meta.maxR - meta.minR) + 1;
+    // Succession slots — one instanceMeta dict per slot
+    const slotsInstanceMeta = getSuccessionSlots(bed).map(slot => {
+      const slotMeta = {};
+      Object.entries(slot.cells || {}).forEach(([key, val]) => {
+        const cell = normalizeCellValue(val, key);
+        if (!cell) return;
+        const [r, c] = key.split(',').map(Number);
+        const existing = slotMeta[cell.instanceId] || {
+          minR: r, maxR: r, minC: c, maxC: c,
+          seedId: null, lifecycle: 'planned', seasonalMode: false,
+        };
+        existing.minR = Math.min(existing.minR, r);
+        existing.maxR = Math.max(existing.maxR, r);
+        existing.minC = Math.min(existing.minC, c);
+        existing.maxC = Math.max(existing.maxC, c);
+        if (cell.origin) existing.seedId    = cell.seedId    || null;
+        if (cell.origin) existing.lifecycle = cell.lifecycle || 'planned';
+        if (cell.origin) existing.seasonalMode = cell.seasonalMode || false;
+        slotMeta[cell.instanceId] = existing;
+      });
+      Object.values(slotMeta).forEach(m => {
+        const seed = m.seedId ? invById.get(m.seedId) : null;
+        m.imageSources = seedImageSources(seed);
+        m.cols = (m.maxC - m.minC) + 1;
+        m.rows = (m.maxR - m.minR) + 1;
+      });
+      return slotMeta;
     });
 
     // col labels
@@ -2077,19 +2191,19 @@ const Beds = (() => {
         const showDeleteButton = !!(plant && meta && r === meta.minR && c === meta.maxC);
 
         // ── Seasonal stage overlay ────────────────────────────────
-        // ── Seasonal stage overlay ────────────────────────────────
         let seasonalMeta = null;
         let isDormantCell = false;  // perennial dormant: occupied but dimmed
-        let isAbsentCell  = false;  // annual out-of-season: slot appears free
-        if (selectedViewMonth !== null && plant && !plant._isPath && (meta?.seasonalMode || plant.perennial)) {
+        let isAbsentCell  = false;  // annual out-of-season OR terminal state: slot appears free
+        // Terminal states always free the slot — use instanceMeta lifecycle (covers non-origin cells)
+        if (cell && plant && !plant._isPath && TERMINAL_STATES.has(lifecycle)) {
+          isAbsentCell = true;
+        } else if (selectedViewMonth !== null && plant && !plant._isPath && (meta?.seasonalMode || plant.perennial)) {
           const stage = getSeasonalStage(plant, selectedViewMonth);
           if (stage === 'dormant') {
             if (plant.perennial) {
-              // Perennial is physically in the ground — show dimmed
               isDormantCell = true;
               seasonalMeta = SEASONAL_STAGE_META.dormant;
             } else {
-              // Annual is not here this month — slot looks free for succession planning
               isAbsentCell = true;
             }
           } else {
@@ -2097,22 +2211,43 @@ const Beds = (() => {
           }
         }
 
-        // ── Succession overlay: if this cell is absent, check for a succession plant ──────
-        const succRawCell = (bed.successionCells || {})[key];
-        const succCell    = succRawCell ? normalizeCellValue(succRawCell, key) : null;
-        const succPlant   = succCell ? PlantDB.get(succCell.plantId) : null;
-        const succMeta    = succCell ? succInstanceMeta[succCell.instanceId] : null;
-        // When an absent cell has a succession plant, use the succession data for display
-        // hasSuccession: true when a succession plant should be displayed at this cell.
-        // This applies to ANY cell in the succession footprint where the primary slot is
-        // either absent (seasonal annual out-of-season) or simply empty — covering the case
-        // where a larger succession plant spans cells that have no primary plant at all.
+        // ── Succession chain: walk slots to find the active succession plant ──────────────
         const primaryIsAbsentOrEmpty = !plant || isAbsentCell;
-        const hasSuccession = selectedViewMonth !== null && !!succPlant && primaryIsAbsentOrEmpty;
-        const displayCell     = hasSuccession ? succCell  : cell;
-        const displayPlant    = hasSuccession ? succPlant : plant;
-        const displayMeta     = hasSuccession ? succMeta  : meta;
-        const displayIsOrigin = hasSuccession ? !!succCell.origin : isOrigin;
+        let activeSuccSlot = -1;
+        let activeSuccCell = null;
+        let activeSuccPlant = null;
+        let activeSuccMeta = null;
+        if (primaryIsAbsentOrEmpty) {
+          const slots = getSuccessionSlots(bed);
+          for (let si = 0; si < slots.length; si++) {
+            const slotRaw = (slots[si].cells || {})[key];
+            if (!slotRaw) continue;
+            const slotCell = normalizeCellValue(slotRaw, key);
+            const slotPlant = slotCell ? PlantDB.get(slotCell.plantId) : null;
+            if (!slotPlant) continue;
+            // Succession plant is active when it is NOT absent itself.
+            // Pass the instanceMeta lifecycle so non-origin cells resolve the correct state.
+            const slotMeta = slotsInstanceMeta[si]?.[slotCell.instanceId];
+            if (!isCellAbsent(slotCell, slotPlant, slotMeta?.lifecycle)) {
+              activeSuccSlot = si;
+              activeSuccCell = slotCell;
+              activeSuccPlant = slotPlant;
+              activeSuccMeta = slotsInstanceMeta[si]?.[slotCell.instanceId] || null;
+              break;
+            }
+          }
+        }
+        // hasSuccession: active when primary is absent AND a slot has an active plant.
+        // Terminal-state absence works in any view; seasonal absence requires month view.
+        const isTerminalAbsence = cell && TERMINAL_STATES.has(lifecycle);
+        const hasSuccession = primaryIsAbsentOrEmpty && activeSuccSlot >= 0 &&
+          (isTerminalAbsence || selectedViewMonth !== null || !plant);
+        const succCell  = activeSuccCell;   // backward-compat alias used below
+        const succPlant = activeSuccPlant;
+        const displayCell     = hasSuccession ? activeSuccCell  : cell;
+        const displayPlant    = hasSuccession ? activeSuccPlant : plant;
+        const displayMeta     = hasSuccession ? activeSuccMeta  : meta;
+        const displayIsOrigin = hasSuccession ? !!activeSuccCell.origin : isOrigin;
         const displayRg       = displayPlant && !displayPlant._isPath ? rotationGroup(displayPlant) : null;
         const displayIsPerimeterCell = !!(displayMeta && (r === displayMeta.minR || r === displayMeta.maxR || c === displayMeta.minC || c === displayMeta.maxC));
 
@@ -2126,8 +2261,9 @@ const Beds = (() => {
         const pathCls = plant?._isPath ? ' gcell-path' : '';
         const dormantCls = isDormantCell ? ' gcell-dormant' : '';
         // Absent class only when truly absent (no succession occupying it)
-        const absentCls  = (isAbsentCell && !hasSuccession) ? ' gcell-seasonal-absent' : '';
-        const successionCls = hasSuccession ? ' gcell-succession' : '';
+        const absentCls      = (isAbsentCell && !hasSuccession) ? ' gcell-seasonal-absent' : '';
+        const terminatedCls  = (isAbsentCell && !hasSuccession && isTerminalAbsence) ? ' gcell-terminated' : '';
+        const successionCls  = hasSuccession ? ' gcell-succession' : '';
         const pathBg = plant?._isPath ? (cell?.pathColor || '#c8a882') : null;
         const seasonalBg = (seasonalMeta && !pathBg && !isAbsentCell) ? `;background:${seasonalMeta.color}` : '';
         const pathColorStyle = pathBg ? `;background:${pathBg};border-color:${pathBg}` : '';
@@ -2135,7 +2271,7 @@ const Beds = (() => {
           ? `draggable="true" ondragstart="Beds.dragStart(event,'${bed.id}',${r},${c})" ondragend="Beds.dragEnd()"`
           : '';
         const displayInstanceId = hasSuccession ? succCell.instanceId : (cell?.instanceId || '');
-        rowsHtml += `<div class="gcell${effectiveOcc}${effectiveCat}${effectiveRot}${pm}${canPl}${pathCls}${dormantCls}${absentCls}${successionCls}"
+        rowsHtml += `<div class="gcell${effectiveOcc}${effectiveCat}${effectiveRot}${pm}${canPl}${pathCls}${dormantCls}${absentCls}${terminatedCls}${successionCls}"
           ${dragAttrs}
           style="width:${cs}px;height:${cs}px${pathColorStyle}${seasonalBg}"
           data-bed="${bed.id}" data-r="${r}" data-c="${c}"
@@ -2320,15 +2456,29 @@ const Beds = (() => {
       clearInstanceFocus();
       placeArmedPlantAt(bedId, r, c);
     } else {
-      // show info panel for occupied cell
-      // Prefer succession layer when primary is absent
+      // show info panel for occupied cell — walk succession chain
       const key = `${r},${c}`;
       const primaryCell = normalizeCellValue(bed.cells[key], key);
       const primaryPlant = primaryCell ? PlantDB.get(primaryCell.plantId) : null;
-      const succRaw = bed.successionCells ? bed.successionCells[key] : null;
-      const succClickCell = succRaw ? normalizeCellValue(succRaw, key) : null;
-      const useSuccession = !!(primaryCell && primaryPlant && isCellAbsent(primaryCell, primaryPlant) && succClickCell);
-      const cell = useSuccession ? succClickCell : primaryCell;
+      // Resolve lifecycle via origin cell to handle non-origin cells of multi-cell plants
+      const primaryOriginResult = primaryCell?.instanceId ? findOriginCell(bed, primaryCell.instanceId) : null;
+      const primaryResolvedLifecycle = primaryOriginResult?.cell?.lifecycle || primaryCell?.lifecycle;
+      const primaryAbsent = !!(primaryCell && primaryPlant && isCellAbsent(primaryCell, primaryPlant, primaryResolvedLifecycle));
+      let cell = primaryAbsent ? null : primaryCell;
+      if (primaryAbsent) {
+        const slots = getSuccessionSlots(bed);
+        for (let si = 0; si < slots.length; si++) {
+          const slotRaw = (slots[si].cells || {})[key];
+          if (!slotRaw) continue;
+          const slotCell = normalizeCellValue(slotRaw, key);
+          const slotPlant = slotCell ? PlantDB.get(slotCell.plantId) : null;
+          if (!slotPlant) continue;
+          const slotOriginResult = slotCell?.instanceId ? findOriginCell(bed, slotCell.instanceId) : null;
+          const slotResolvedLifecycle = slotOriginResult?.cell?.lifecycle || slotCell?.lifecycle;
+          if (!isCellAbsent(slotCell, slotPlant, slotResolvedLifecycle)) { cell = slotCell; break; }
+        }
+        if (!cell) cell = primaryCell; // no active succession — still show primary info
+      }
       const pid = cell?.plantId;
       if (pid) {
         const target = { bedId, instanceId: cell.instanceId };
@@ -2369,11 +2519,8 @@ const Beds = (() => {
         }
         const infoTarget = lastClickedInstance;
         const infoBed = infoTarget ? beds.find(b => b.id === infoTarget.bedId) : null;
-        // Search both primary cells and succession cells for the origin
-        const infoOrigin = infoBed
-          ? (Object.values(infoBed.cells).find(v => v?.instanceId === infoTarget.instanceId && v?.origin)
-             || Object.values(infoBed.successionCells || {}).find(v => v?.instanceId === infoTarget.instanceId && v?.origin))
-          : null;
+        const infoOriginResult = infoBed ? findOriginCell(infoBed, infoTarget.instanceId) : null;
+        const infoOrigin = infoOriginResult?.cell;
         if (infoOrigin) {
           const infoPlant = PlantDB.get(infoOrigin.plantId);
           if (infoPlant) showPlantInfo(infoPlant, infoOrigin.rotation || 0, infoTarget.instanceId, infoTarget.bedId);
@@ -2704,8 +2851,8 @@ const Beds = (() => {
       const bed = Store.getBeds().find(b => b.id === bedId);
       let currentSeedId = null;
       if (bed) {
-        const origin = Object.values(bed.cells).find(v => v?.instanceId === instanceId && v?.origin);
-        currentSeedId = origin?.seedId || null;
+        const found = findOriginCell(bed, instanceId);
+        currentSeedId = found?.cell?.seedId || null;
       }
       const options = seedsForPlant(p.id, false);
       const optHtml = [`<option value="">Generic (no packet)</option>`, ...options.map(s =>
@@ -2753,9 +2900,8 @@ const Beds = (() => {
     if (instanceId && bedId && !p._isPath) {
       const bed = Store.getBeds().find(b => b.id === bedId);
       if (bed) {
-        const originCell = Object.entries(bed.cells)
-          .map(([k, v]) => normalizeCellValue(v, k))
-          .find(v => v?.instanceId === instanceId && v?.origin);
+        const foundRow = findOriginCell(bed, instanceId);
+        const originCell = foundRow ? normalizeCellValue(foundRow.cell, foundRow.key) : null;
         if (originCell && (originCell.rowBlockMode || originCell.rowBatchTotal > 1)) {
           let rowDetailsContent = '';
           const totalPlants = originCell.rowBlockMode && originCell.rowBlockTotal > 1
@@ -2810,9 +2956,9 @@ const Beds = (() => {
       let lifecycle = 'planned';
       let linkedSeed = null;
       if (bed) {
-        const origin = Object.values(bed.cells).find(v => v?.instanceId === instanceId && v?.origin);
-        lifecycle = origin?.lifecycle || 'planned';
-        linkedSeed = origin?.seedId ? Store.getInventory().find(s => s.id === origin.seedId) : null;
+        const foundLc = findOriginCell(bed, instanceId);
+        lifecycle = foundLc?.cell?.lifecycle || 'planned';
+        linkedSeed = foundLc?.cell?.seedId ? Store.getInventory().find(s => s.id === foundLc.cell.seedId) : null;
       }
       const meta = LC_META[lifecycle] || LC_META.planned;
       const selectionCount = getLifecycleTargets().length;
@@ -2885,7 +3031,8 @@ const Beds = (() => {
     if (instanceId && bedId && !p._isPath && p.plantingMode !== 'direct') {
       const currentBed = Store.getBeds().find(b => b.id === bedId);
       if (currentBed && !isSeedTrayBed(currentBed)) {
-        const originCell = Object.values(currentBed.cells).find(v => v?.instanceId === instanceId && v?.origin);
+        const foundTs = findOriginCell(currentBed, instanceId);
+        const originCell = foundTs?.cell || null;
         const linkedBedId  = originCell?.transplantSourceBedId      || '';
         const linkedInstId = originCell?.transplantSourceInstanceId || '';
 
@@ -3338,14 +3485,14 @@ const Beds = (() => {
     const normalBed = beds.find(b => b.id === lastClickedInstance.bedId);
     if (!normalBed) return;
 
-    let plantId = null;
-    Object.entries(normalBed.cells).forEach(([, v]) => {
-      if (typeof v === 'object' && v?.instanceId === lastClickedInstance.instanceId && v?.origin) {
-        plantId = v.plantId;
-        delete v.transplantSourceBedId;
-        delete v.transplantSourceInstanceId;
-      }
-    });
+    const foundDetach = findOriginCell(normalBed, lastClickedInstance.instanceId);
+    if (!foundDetach) return;
+    const plantId = foundDetach.cell.plantId;
+    foundDetach.cells[foundDetach.key] = {
+      ...foundDetach.cell,
+      transplantSourceBedId: null,
+      transplantSourceInstanceId: null,
+    };
     if (!plantId) return;
 
     Store.updateBed(normalBed);
@@ -3374,17 +3521,15 @@ const Beds = (() => {
       let qty = 1;
       let context = { bedContextId: bed.id, bedContextName: bed.name };
 
-      Object.entries(bed.cells).forEach(([k, v]) => {
-        if (typeof v === 'object' && v?.instanceId === instanceId && v?.origin) {
-          if (v?.plantId === '__path__') return;
-          prevState = v.lifecycle || 'planned';
-          plantId = v.plantId;
-          seedId = v.seedId || null;
-          qty = v.rowBlockTotal > 1 ? v.rowBlockTotal : 1;
-          context = contextFromOriginCell(bed, normalizeCellValue(v, k), k);
-          bed.cells[k] = { ...v, lifecycle: state };
-        }
-      });
+      const found = findOriginCell(bed, instanceId);
+      if (found && found.cell.plantId !== '__path__') {
+        prevState = found.cell.lifecycle || 'planned';
+        plantId   = found.cell.plantId;
+        seedId    = found.cell.seedId || null;
+        qty       = found.cell.rowBlockTotal > 1 ? found.cell.rowBlockTotal : 1;
+        context   = contextFromOriginCell(bed, normalizeCellValue(found.cell, found.key), found.key);
+        found.cells[found.key] = { ...found.cell, lifecycle: state };
+      }
 
       if (!plantId) return;
       touched.add(bed.id);
@@ -3418,10 +3563,10 @@ const Beds = (() => {
     // Re-render info panel with updated state
     if (lastClickedInstance) {
       const bed = beds.find(b => b.id === lastClickedInstance.bedId);
-      const origin = bed ? Object.values(bed.cells).find(v => v?.instanceId === lastClickedInstance.instanceId && v?.origin) : null;
-      if (origin) {
-        const plant = PlantDB.get(origin.plantId);
-        if (plant) showPlantInfo(plant, origin.rotation || 0, lastClickedInstance.instanceId, lastClickedInstance.bedId);
+      const found = bed ? findOriginCell(bed, lastClickedInstance.instanceId) : null;
+      if (found) {
+        const plant = PlantDB.get(found.cell.plantId);
+        if (plant) showPlantInfo(plant, found.cell.rotation || 0, lastClickedInstance.instanceId, lastClickedInstance.bedId);
       }
     }
     if (targets.length > 1) Toast.show(`Status set to ${LC_META[state]?.label || state} for ${targets.length} selections${changed !== targets.length ? ` (${changed} changed)` : ''}`);
