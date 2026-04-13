@@ -478,10 +478,8 @@
 function setLibCat(btn) {
   document.querySelectorAll('#bed-lib-filters .ftab').forEach(t => t.classList.remove('active'));
   btn.classList.add('active');
-  if (btn.dataset.cat === 'all') {
-    const search = document.getElementById('bed-lib-search');
-    if (search) search.value = '';
-  }
+  const search = document.getElementById('bed-lib-search');
+  if (search) search.value = '';
   Beds.renderLibrary();
 }
 </script>
