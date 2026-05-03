@@ -145,64 +145,108 @@ function monthNumber(val) {
   if (!val) return null;
   return new Date(val + 'T12:00:00').getMonth() + 1;
 }
-function inOutdoorWindow(month, settings) {
+
+// ── Half-month helpers (1=early Jan, 1.5=late Jan, …, 12=early Dec, 12.5=late Dec) ─
+const halfToMonth = d => Math.ceil(d);                        // 1.5 → 2, 3 → 3
+const halfIsEarly = d => Number.isInteger(d);                 // 3=early, 3.5=late
+const monthToHalves = m => [m, m + 0.5];                     // 3 → [3, 3.5]
+const toHalf    = v => { const frac = v - Math.floor(v); const base = frac < 0.5 ? Math.floor(v) : Math.floor(v) + 0.5; return Math.min(Math.max(base, 1), 12.5); };
+// Whole-integer range endpoint expands to include the late half: '3-6' → early Mar … late Jun
+const toEndHalf = v => { const h = toHalf(v); return (Number.isInteger(v) && h >= 1 && h <= 12) ? h + 0.5 : h; };
+function parseHalfMonths(str) {
+  if (!str?.trim()) return [];
+  const result = new Set();
+  for (const token of str.split(',')) {
+    const t = token.trim();
+    if (!t) continue;
+    const parts = t.split('-');
+    if (parts.length === 2) {
+      const from = toHalf(parseFloat(parts[0]));
+      const to   = toEndHalf(parseFloat(parts[1]));
+      if (isNaN(from) || isNaN(to) || from > to) continue;
+      for (let h = from; h <= to + 1e-9; h = Math.round((h + 0.5) * 10) / 10) result.add(h);
+    } else {
+      const v = parseFloat(t);
+      if (isNaN(v)) continue;
+      if (Number.isInteger(v) && v >= 1 && v <= 12) { result.add(v); result.add(v + 0.5); }
+      else { const h = toHalf(v); if (h >= 1 && h <= 12.5) result.add(h); }
+    }
+  }
+  return [...result].sort((a, b) => a - b);
+}
+function compactHalves(arr) {
+  if (!arr?.length) return '';
+  const sorted = [...arr].sort((a, b) => a - b);
+  const segs = [];
+  let s = sorted[0], p = sorted[0];
+  for (let i = 1; i < sorted.length; i++) {
+    if (Math.abs(sorted[i] - p - 0.5) > 1e-9) { segs.push([s, p]); s = sorted[i]; }
+    p = sorted[i];
+  }
+  segs.push([s, p]);
+  return segs.map(([a, b]) => {
+    if (a === b) return Number.isInteger(a) ? `${a}.1` : String(a);
+    // Single full month [n, n+0.5] — shorthand 'n'; all other ranges keep exact endpoints
+    if (Number.isInteger(a) && b === a + 0.5) return String(a);
+    const bStr = (Number.isInteger(b) && b >= 1 && b <= 12) ? `${b}.1` : String(b);
+    return `${a}-${bStr}`;
+  }).join(', ');
+}
+// Returns true when half-month decimal d falls inside the frost-free outdoor window
+function inOutdoorWindow(d, settings) {
   const lf = monthNumber(settings.lastFrost);
   const ff = monthNumber(settings.firstFrost);
   if (!lf || !ff) return true;
-  return month >= lf && month <= ff;
+  return halfToMonth(d) >= lf && halfToMonth(d) <= ff;
 }
 
 // ── Seasonal stage computation ───────────────────────────────────────────────
 const SEASONAL_STAGE_META = {
-  perennial:     { label: 'Perennial (active)',   icon: '♾️',  color: '#d8f3dc', stripColor: '#52b788' },
-  sowing:        { label: 'Sowing time',          icon: '🌰',  color: '#fff8e1', stripColor: '#c08a10' },
-  transplanting: { label: 'Transplant time',      icon: '🌱',  color: '#e3f2fd', stripColor: '#1a6fa8' },
-  growing:       { label: 'Growing',              icon: '🌿',  color: '#ccf5d8', stripColor: '#43aa8b' },
-  harvesting:    { label: 'Harvest time',         icon: '🌾',  color: '#e8f5e9', stripColor: '#2d7a40' },
-  dormant:       { label: 'Dormant / out of season', icon: '💤', color: '#eeeeee', stripColor: '#9daab5' },
+  perennial:      { label: 'Perennial (active)',        icon: '♾️',  color: '#d8f3dc', stripColor: '#52b788' },
+  sowing_indoor:  { label: 'Sow indoors / under cover', icon: '🏠',  color: '#ede7f6', stripColor: '#7c3aed' },
+  sowing_outdoor: { label: 'Sow or plant outdoors',     icon: '🌱',  color: '#e8f5e9', stripColor: '#2d7a40' },
+  growing:        { label: 'Growing',                   icon: '🌿',  color: '#ccf5d8', stripColor: '#43aa8b' },
+  harvesting:     { label: 'Harvest time',              icon: '🌾',  color: '#fff8e1', stripColor: '#c08a10' },
+  dormant:        { label: 'Dormant / out of season',   icon: '💤',  color: '#eeeeee', stripColor: '#9daab5' },
 };
 
 /**
- * Returns the seasonal stage of a plant for a given 1-based month.
- * For perennials, checks plant.dormant array; otherwise active year-round.
- * For annuals, deduces 'growing' by pairing each sow/tr month with its next
- * harvest month — handles multi-window plants (e.g. carrot) correctly.
- * @param {object} plant - full plant object from PlantDB
- * @param {number} month - 1–12
- * @returns {'perennial'|'sowing'|'transplanting'|'growing'|'harvesting'|'dormant'}
+ * Returns the seasonal stage of a plant for a given half-month decimal.
+ * 1=early Jan, 1.5=late Jan, …, 12=early Dec, 12.5=late Dec.
+ * @param {object} plant
+ * @param {number} half - decimal 1–12.5 in 0.5 steps
+ * @returns {'perennial'|'sowing_indoor'|'sowing_outdoor'|'growing'|'harvesting'|'dormant'}
  */
-function getSeasonalStage(plant, month) {
+function getSeasonalStage(plant, half) {
   if (!plant || plant._isPath) return 'dormant';
   if (plant.perennial) {
     const dormant = plant.dormant ?? [];
-    return dormant.includes(month) ? 'dormant' : 'perennial';
+    return dormant.includes(half) ? 'dormant' : 'perennial';
   }
-  const sow  = plant.sow  ?? [];
-  const tr   = plant.tr   ?? [];
-  const harv = plant.harv ?? [];
-  if (harv.includes(month))  return 'harvesting';
-  if (tr.includes(month))    return 'transplanting';
-  if (sow.includes(month))   return 'sowing';
+  const sowIn  = plant.sowIndoor  ?? [];
+  const sowOut = plant.sowOutdoor ?? [];
+  const harv   = plant.harv       ?? [];
+  if (harv.includes(half))    return 'harvesting';
+  if (sowOut.includes(half))  return 'sowing_outdoor';
+  if (sowIn.includes(half))   return 'sowing_indoor';
 
-  // Deduce 'growing': for each sow/tr month s, find the next harvest month h
-  // after s. If the current month falls in the gap (s, h), it's growing.
-  // Handles wrap-around (e.g. garlic: sow Oct→ harv Jun) only when no harvest
-  // exists in the same year after s.
-  const sowTr = [...new Set([...sow, ...tr])];
-  if (sowTr.length === 0 || harv.length === 0) return 'dormant';
+  // Deduce 'growing': for each sow half-month s, find the next harvest
+  // half-month h after s. If the current half falls in the gap (s, h),
+  // it's growing. Handles wrap-around (e.g. garlic: sow Oct → harv Jun).
+  const sowAll = [...new Set([...sowIn, ...sowOut])];
+  if (sowAll.length === 0 || harv.length === 0) return 'dormant';
 
   const harvSorted = [...harv].sort((a, b) => a - b);
 
-  for (const s of sowTr) {
-    // Harvest months that come after s in the same calendar year
+  for (const s of sowAll) {
     const nextHarv = harvSorted.find(h => h > s);
     if (nextHarv !== undefined) {
-      if (month > s && month < nextHarv) return 'growing';
+      if (half > s && half < nextHarv) return 'growing';
     } else {
-      // No harvest later in the year — wrap-around season (e.g. garlic)
-      // Growing = after s through end of year, OR from Jan up to first harv
+      // Wrap-around season: growing after s through year-end, or from
+      // half-month 1 up to first harvest.
       const wrapHarv = harvSorted[0];
-      if (month > s || month < wrapHarv) return 'growing';
+      if (half > s || half < wrapHarv) return 'growing';
     }
   }
   return 'dormant';
@@ -385,7 +429,7 @@ const HelpUI = (() => {
           <li>⏰ <strong>Prep Harvest</strong> — harvest is next month; prepare tools, containers, or storage.</li>
         </ul>
       </li>
-      <li>The planting method (direct sow vs. tray start) comes from the <strong>Preferred planting method</strong> field in the plant editor. If not set, direct sow is assumed. Plants with <em>tr: none</em> (e.g. Carrot, Garlic) are always direct sow regardless of the setting.</li>
+      <li>The planting method (direct sow vs. tray start) comes from the <strong>Preferred planting method</strong> field in the plant editor. If not set, direct sow is assumed. Plants with no <em>Sow indoors</em> dates (e.g. Carrot, Garlic) are always direct sow regardless of the setting.</li>
       <li>Click <strong>✓ [action]</strong> on a card to advance all matching plants to the next lifecycle state in one click. A journal event is recorded for each plant updated.</li>
       <li>Use the <strong>bed filter</strong> dropdown to focus the planning list on a single bed.</li>
       <li>Click <strong>↺ Refresh</strong> to regenerate tasks after making changes in other tabs.</li>
@@ -1340,16 +1384,16 @@ const CustomPlants = (() => {
         <div class="form-hint">Months when the plant is dormant. Leave empty for year-round activity.</div>
       </div>
       <div class="form-row">
-        <label>Sow months (comma-separated, 1=Jan)</label>
-        <input id="cp-sow" type="text" placeholder="e.g. 3,4,5" value="${(existing?.sow??[]).join(',')}">
+        <label>Sow indoors — 3=early Mar, 3.5=late Mar (blank = direct-sow only)</label>
+        <input id="cp-sowIndoor" type="text" placeholder="e.g. 2-3" value="${compactHalves(existing?.sowIndoor??[])}">
       </div>
       <div class="form-row">
-        <label>Transplant months</label>
-        <input id="cp-tr" type="text" placeholder="e.g. 5,6" value="${(existing?.tr??[]).join(',')}">
+        <label>Sow / plant outdoors</label>
+        <input id="cp-sowOutdoor" type="text" placeholder="e.g. 5-6" value="${compactHalves(existing?.sowOutdoor??[])}">
       </div>
       <div class="form-row">
         <label>Harvest months</label>
-        <input id="cp-harv" type="text" placeholder="e.g. 7,8,9" value="${(existing?.harv??[]).join(',')}">
+        <input id="cp-harv" type="text" placeholder="e.g. 7-9" value="${compactHalves(existing?.harv??[])}">
       </div>
       <div class="form-row">
         <label>Good companions (hold Ctrl to multi-select)</label>
@@ -1388,11 +1432,8 @@ const CustomPlants = (() => {
     const name = document.getElementById('cp-name').value.trim();
     if (!name) { alert('Plant name is required.'); return; }
 
-    const parseMon = id => {
-      const val = document.getElementById(id)?.value.trim();
-      if (!val) return [];
-      return val.split(',').map(v => parseInt(v.trim(), 10)).filter(n => n >= 1 && n <= 12);
-    };
+    const parseMon     = id => { const v = document.getElementById(id)?.value.trim(); if (!v) return []; return v.split(',').map(s => parseFloat(s)).filter(n => n >= 1 && n <= 12 && Number.isInteger(n)); };
+    const parseSowHarv = id => parseHalfMonths(document.getElementById(id)?.value.trim());
     const getMulti = id => {
       const sel = document.getElementById(id);
       return sel ? [...sel.options].filter(o => o.selected).map(o => o.value) : [];
@@ -1421,9 +1462,9 @@ const CustomPlants = (() => {
       perennial:    document.getElementById('cp-lifecycle').value === 'perennial',
       biennial:     document.getElementById('cp-lifecycle').value === 'biennial',
       dormant:      parseMon('cp-dormant'),
-      sow:          parseMon('cp-sow'),
-      tr:           parseMon('cp-tr'),
-      harv:         parseMon('cp-harv'),
+      sowIndoor:    parseSowHarv('cp-sowIndoor') || null,
+      sowOutdoor:   parseSowHarv('cp-sowOutdoor'),
+      harv:         parseSowHarv('cp-harv'),
       good:         getMulti('cp-good'),
       bad:          getMulti('cp-bad'),
       notes:        document.getElementById('cp-notes').value.trim(),
@@ -1467,10 +1508,10 @@ const CustomPlants = (() => {
       germinationDaysMax: src.germinationDaysMax ?? null,
       perennial: src.perennial || false,
       biennial:  src.biennial  || false,
-      dormant: [...(src.dormant ?? [])],
-      sow:  [...(src.sow  ?? [])],
-      tr:   src.tr ? [...src.tr] : [],
-      harv: [...(src.harv ?? [])],
+      dormant:    [...(src.dormant    ?? [])],
+      sowIndoor:  src.sowIndoor  ? [...src.sowIndoor]  : null,
+      sowOutdoor: [...(src.sowOutdoor ?? [])],
+      harv:       [...(src.harv       ?? [])],
       good: [...(src.good ?? [])],
       bad:  [...(src.bad  ?? [])],
       notes: src.notes || '',
@@ -1541,39 +1582,56 @@ const CalendarView = (() => {
       return;
     }
 
-    let h = `<table class="cal-table"><thead><tr><th>Plant</th>`;
+    // Two-row header: month names (colspan 2) then ▲/▼ sub-labels
+    let h = `<table class="cal-table"><thead><tr><th rowspan="2" class="cal-plant-col">Plant</th>`;
     MONTHS.forEach((m, idx) => {
       const month = idx + 1;
       const tags = [];
       if (month === monthNumber(settings.lastFrost)) tags.push('LF');
       if (month === monthNumber(settings.firstFrost)) tags.push('FF');
       const klass = tags.length ? ' class="cal-frost-col"' : '';
-      h += `<th${klass}>${m}${tags.length ? `<span class="cal-frost-tag">${tags.join('/')}</span>` : ''}</th>`;
+      h += `<th${klass} colspan="2">${m}${tags.length ? `<span class="cal-frost-tag">${tags.join('/')}</span>` : ''}</th>`;
     });
+    h += `</tr><tr>`;
+    for (let m = 1; m <= 12; m++) {
+      h += `<th class="cal-half-hdr" title="Early ${MONTHS[m-1]}">▲</th><th class="cal-half-hdr" title="Late ${MONTHS[m-1]}">▼</th>`;
+    }
     h += `</tr></thead><tbody>`;
+
+    // Half-months as decimals: 1, 1.5, 2, 2.5, … 12, 12.5
+    const HALVES = [];
+    for (let m = 1; m <= 12; m++) { HALVES.push(m, m + 0.5); }
+
     plants.forEach(p => {
-      h += `<tr><td>${p.emoji} ${escHtml(p.name)}</td>`;
-      for (let m = 1; m <= 12; m++) {
-        const sow  = (p.sow  ?? []).includes(m);
-        const tr   = (p.tr   ?? []).includes(m);
-        const harv = (p.harv ?? []).includes(m);
-        let bg = 'transparent', sym = '', title = '';
-        if (harv) { bg = '#e8f5e9'; sym = '🌾'; title = 'Harvest'; }
-        if (tr)   { bg = '#e3f2fd'; sym = '🌱'; title = 'Transplant'; }
-        if (sow)  { bg = '#fff8e1'; sym = '🌰'; title = 'Sow'; }
-        const outdoor = inOutdoorWindow(m, settings);
-        const frostClass = outdoor ? '' : ' class="cal-outside-season"';
-        h += `<td${frostClass} style="background:${bg}" title="${title}${title && !outdoor ? ' · ' : ''}${!outdoor ? 'Outside main frost-free window' : ''}">${sym}</td>`;
-      }
+      h += `<tr><td class="cal-plant-name">${p.emoji} ${escHtml(p.name)}</td>`;
+      HALVES.forEach(d => {
+        const hasIn   = (p.sowIndoor  ?? []).includes(d);
+        const hasOut  = (p.sowOutdoor ?? []).includes(d);
+        const hasHarv = (p.harv       ?? []).includes(d);
+        const outside = !inOutdoorWindow(d, settings);
+        const titleParts = [
+          hasIn   && 'Sow indoors',
+          hasOut  && 'Sow / plant outdoors',
+          hasHarv && 'Harvest',
+        ].filter(Boolean);
+        const halfLabel = (halfIsEarly(d) ? 'Early ' : 'Late ') + MONTHS[halfToMonth(d) - 1];
+        const title = titleParts.length ? `${halfLabel}: ${titleParts.join(' · ')}` : halfLabel;
+        const frostCls = outside ? ' cal-bar--frost' : '';
+        const bars = `<div class="cal-bar cal-bar-indoor ${hasIn ? 'cal-bar--active' : ''}${frostCls}"></div>` +
+          `<div class="cal-bar cal-bar-outdoor ${hasOut ? 'cal-bar--active' : ''}${frostCls}"></div>` +
+          `<div class="cal-bar cal-bar-harvest ${hasHarv ? 'cal-bar--active' : ''}"></div>`;
+        const borderCls = halfIsEarly(d) ? ' cal-cell-early' : ' cal-cell-late';
+        h += `<td class="cal-cell${borderCls}" title="${title}">${bars}</td>`;
+      });
       h += `</tr>`;
     });
     h += `</tbody></table>
     <div class="cal-legend">
-      <span>🌰 Direct sow</span>
-      <span>🌱 Transplant</span>
-      <span>🌾 Harvest</span>
-      <span><strong>LF</strong> Last frost month</span>
-      <span><strong>FF</strong> First frost month</span>
+      <span><span class="cal-legend-swatch" style="background:#7c3aed"></span> Sow indoors / under cover</span>
+      <span><span class="cal-legend-swatch" style="background:#2d7a40"></span> Sow or plant outdoors</span>
+      <span><span class="cal-legend-swatch" style="background:#c08a10"></span> Harvest</span>
+      <span>▲ Early month &nbsp; ▼ Late month</span>
+      <span><strong>LF</strong> Last frost &nbsp; <strong>FF</strong> First frost</span>
     </div>`;
     el.innerHTML = settingsSummary(settings) + h;
   }
@@ -1705,9 +1763,9 @@ const BuiltinPlants = (() => {
         <input id="bp-dormant" type="text" placeholder="e.g. 11,12,1,2" value="${escAttr(toCsv(current.dormant))}">
         <div class="form-hint">Months when the plant is dormant. Leave empty for year-round activity.</div>
       </div>
-      <div class="form-row"><label>Sow months</label><input id="bp-sow" type="text" value="${escAttr(toCsv(current.sow))}" placeholder="e.g. 3,4,5"></div>
-      <div class="form-row"><label>Transplant months</label><input id="bp-tr" type="text" value="${escAttr(toCsv(current.tr))}" placeholder="e.g. 5,6"></div>
-      <div class="form-row"><label>Harvest months</label><input id="bp-harv" type="text" value="${escAttr(toCsv(current.harv))}" placeholder="e.g. 7,8,9"></div>
+      <div class="form-row"><label>Sow indoors — 3=early Mar, 3.5=late Mar (blank = direct-sow only)</label><input id="bp-sowIndoor" type="text" value="${escAttr(compactHalves(current.sowIndoor))}" placeholder="e.g. 2-3"></div>
+      <div class="form-row"><label>Sow / plant outdoors</label><input id="bp-sowOutdoor" type="text" value="${escAttr(compactHalves(current.sowOutdoor))}" placeholder="e.g. 5-6"></div>
+      <div class="form-row"><label>Harvest months</label><input id="bp-harv" type="text" value="${escAttr(compactHalves(current.harv))}" placeholder="e.g. 7-9"></div>
       <div class="form-row"><label>Good companions</label><select id="bp-good" multiple size="4">${optHtml}</select></div>
       <div class="form-row"><label>Bad companions</label><select id="bp-bad" multiple size="4">${optHtml}</select></div>
       <div class="form-row"><label>Growing notes</label><textarea id="bp-notes">${escHtml(current.notes || '')}</textarea></div>
@@ -1726,11 +1784,8 @@ const BuiltinPlants = (() => {
     document.getElementById('bp-modal-reset').onclick = reset;
     Modal.open('bp-modal');
 
-    function parseMon(id) {
-      const val = document.getElementById(id)?.value.trim();
-      if (!val) return [];
-      return val.split(',').map(v => parseInt(v.trim(), 10)).filter(n => n >= 1 && n <= 12);
-    }
+    const parseMon     = id => { const v = document.getElementById(id)?.value.trim(); if (!v) return []; return v.split(',').map(s => parseFloat(s)).filter(n => n >= 1 && n <= 12 && Number.isInteger(n)); };
+    const parseSowHarv = id => parseHalfMonths(document.getElementById(id)?.value.trim());
 
     function getMulti(id) {
       const sel = document.getElementById(id);
@@ -1767,10 +1822,10 @@ const BuiltinPlants = (() => {
         plantingMode: document.getElementById('bp-planting-mode').value || null,
         perennial: document.getElementById('bp-lifecycle').value === 'perennial',
         biennial:  document.getElementById('bp-lifecycle').value === 'biennial',
-        dormant: parseMon('bp-dormant'),
-        sow: parseMon('bp-sow'),
-        tr: parseMon('bp-tr'),
-        harv: parseMon('bp-harv'),
+        dormant:    parseMon('bp-dormant'),
+        sowIndoor:  parseSowHarv('bp-sowIndoor') || null,
+        sowOutdoor: parseSowHarv('bp-sowOutdoor'),
+        harv:       parseSowHarv('bp-harv'),
         good: getMulti('bp-good'),
         bad: getMulti('bp-bad'),
         notes: document.getElementById('bp-notes').value.trim(),

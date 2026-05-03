@@ -1510,7 +1510,7 @@ const Beds = (() => {
       if (cat === 'custom' && !p._custom)  return false;
       if (cat === 'sownow') {
         if (selectedViewMonth === null) return false;
-        const canSow = (p.sow ?? []).includes(selectedViewMonth) || (p.tr ?? []).includes(selectedViewMonth);
+        const canSow = (p.sowIndoor ?? []).includes(selectedViewMonth) || (p.sowOutdoor ?? []).includes(selectedViewMonth);
         if (!canSow) return false;
       } else if (cat === 'perennial') {
         if (!p.perennial) return false;

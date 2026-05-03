@@ -1125,8 +1125,8 @@ body {
 /* ================================================================
    CALENDAR PAGE
    ================================================================ */
-#page-calendar { flex-direction: column; overflow: auto; }
-.cal-wrap { padding: 20px; overflow-x: auto; }
+#page-calendar { flex-direction: column; overflow: hidden; }
+.cal-wrap { flex: 1; padding: 20px; overflow: auto; min-height: 0; }
 .season-summary {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
@@ -1151,14 +1151,19 @@ body {
   font-weight: 700;
   color: var(--primary-dark);
 }
-.cal-table { width: 100%; border-collapse: collapse; font-size: .73rem; }
+.cal-table { border-collapse: collapse; font-size: .71rem; width: 100%; table-layout: fixed; }
 .cal-table th, .cal-table td {
-  padding: 5px 6px; border: 1px solid var(--border); text-align: center;
+  padding: 2px 3px; border: 1px solid var(--border); text-align: center;
 }
-.cal-table th:first-child, .cal-table td:first-child {
-  text-align: left; padding-left: 10px; white-space: nowrap; font-weight: 700; min-width: 130px;
+.cal-plant-col, .cal-plant-name {
+  text-align: left; padding-left: 10px; white-space: nowrap;
+  font-weight: 700; width: 160px;
 }
-.cal-table thead th { background: var(--surface2); font-size: .7rem; text-transform: uppercase; }
+.cal-table thead th { background: var(--surface2); font-size: .67rem; text-transform: uppercase; }
+/* Month colspan headers */
+.cal-table thead tr:first-child th:not(.cal-plant-col) { padding: 3px 0; }
+/* Early/late sub-headers */
+.cal-half-hdr { font-size: .6rem; color: var(--text-muted); padding: 1px 2px; font-weight: 400; }
 .cal-frost-col { position: relative; }
 .cal-frost-tag {
   display: block;
@@ -1167,11 +1172,29 @@ body {
   font-weight: 800;
   color: var(--bad);
 }
-.cal-outside-season {
-  opacity: .62;
+/* Half-month cells: right border only on the late cell to group pairs visually */
+.cal-cell { padding: 2px 2px; vertical-align: middle; min-width: 14px; }
+.cal-cell-early { border-right: none; }
+.cal-cell-late  { border-left: 1px dashed var(--border); }
+
+.cal-bar {
+  height: 9px;
+  border-radius: 3px;
+  margin: 1px 0;
+  background: transparent;
 }
+.cal-bar--active.cal-bar-indoor  { background: #7c3aed; }
+.cal-bar--active.cal-bar-outdoor { background: #2d7a40; }
+.cal-bar--active.cal-bar-harvest { background: #c08a10; }
+
+.cal-bar--frost.cal-bar--active.cal-bar-indoor  { background: #b39ddb; opacity: .65; }
+.cal-bar--frost.cal-bar--active.cal-bar-outdoor { background: #81c784; opacity: .65; }
+
+.cal-bar:not(.cal-bar--active) { background: var(--border); opacity: .25; }
+
 .cal-legend { display: flex; gap: 18px; margin-top: 14px; font-size: .75rem; flex-wrap: wrap; }
 .cal-legend span { display: flex; align-items: center; gap: 5px; }
+.cal-legend-swatch { display: inline-block; width: 12px; height: 12px; border-radius: 2px; }
 
 /* ================================================================
    MODALS

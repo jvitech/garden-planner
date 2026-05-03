@@ -20,7 +20,7 @@ That keeps one single guide source of truth: this GUIDE.md.
 - Beds: Layout, placement, lifecycle updates, and plant details.
 - Seeds: Packet inventory, germination quality, sorting/filtering, rating.
 - My Plants: Create custom plants and edit built-in defaults.
-- Calendar: Seasonal sow/transplant/harvest windows.
+- Calendar: Seasonal sowing and harvest windows at half-month resolution.
 - Stats: Outcome and germination analytics, including expected-vs-actual timing.
 - Journal: Timeline of lifecycle events with date filters and season filter.
 
@@ -85,6 +85,58 @@ Germination success is based on started to germinated outcomes linked to the pac
 - Import plants from shared files.
 
 Plant definitions include expected germination range and spacing rules.
+
+### Half-month date notation
+
+Sowing and harvest dates use half-month decimals for early/late precision:
+
+| Value | Meaning        |
+|-------|----------------|
+| 1     | Early January  |
+| 1.5   | Late January   |
+| 2     | Early February |
+| 2.5   | Late February  |
+| 3     | Early March    |
+| 3.5   | Late March     |
+| 4     | Early April    |
+| 4.5   | Late April     |
+| 5     | Early May      |
+| 5.5   | Late May       |
+| 6     | Early June     |
+| 6.5   | Late June      |
+
+The pattern continues through 12 (early December) and 12.5 (late December).
+
+Enter values as comma-separated numbers or ranges:
+- `3` — both halves of March (early and late)
+- `3.1` — early March only (any decimal n.1–n.4 means early half of month n)
+- `3.5` — late March only (any decimal n.5–n.9 means late half of month n)
+- `3-6` — all half-months from early March through late June (displayed back as `3-6.5`)
+- `3-4, 9-10` — spring and autumn windows
+- `3.5-6` — late March through late June
+
+A whole number as a range endpoint automatically includes both halves of that month,
+so `3-6` and `3-6.5` produce identical results.
+
+### Plant fields
+
+- **Sow indoors** — half-months to start seeds under cover or in trays. Leave blank for direct-sow-only plants (e.g. Carrot, Garlic).
+- **Sow / plant outdoors** — half-months to direct-sow or transplant outdoors.
+- **Harvest months** — half-months when the crop is ready to pick.
+- **Dormant months** — whole months when a perennial is dormant (integers only).
+
+## Calendar
+
+The calendar shows sowing and harvest windows for all plants across the year.
+Each month is split into two columns — ▲ early (1st–15th) and ▼ late (16th–end).
+
+Color bars per cell:
+- **Purple** — sow indoors / under cover
+- **Green** — sow or plant outdoors
+- **Amber** — harvest window
+
+Bars in frost months (outside your last-frost / first-frost window) are shown faded.
+**LF** and **FF** markers indicate your last and first frost months from Settings.
 
 ## Stats Workflow
 

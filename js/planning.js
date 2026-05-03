@@ -62,16 +62,16 @@ function _planGermDaysMsg(instanceId, bedId, plantId, today) {
   return days !== null ? ` — seeded ${days} day${days !== 1 ? 's' : ''} ago` : '';
 }
 
-function _planNextMonthStage(plant, month) {
-  const next = month === 12 ? 1 : month + 1;
+function _planNextHalfStage(plant, half) {
+  const next = half === 12.5 ? 1 : half + 0.5;
   return getSeasonalStage(plant, next);
 }
 
 // Returns 'direct' or 'transplant' based on explicit plantingMode,
 // falling back to 'direct' when not specified.
-// Plants with tr:null are always direct — no transplant possible.
+// Plants with sowIndoor:null have no indoor start — always direct.
 function _planEffectiveMethod(plant) {
-  if (!plant.tr || plant.tr.length === 0) return 'direct';   // tr:null = direct-only
+  if (!plant.sowIndoor || plant.sowIndoor.length === 0) return 'direct';
   if (plant.plantingMode === 'transplant') return 'transplant';
   return 'direct'; // default (covers 'direct', null, or unset)
 }
@@ -113,7 +113,8 @@ const PLAN_URGENCY_ORDER = ['overdue', 'now', 'soon', 'upcoming'];
  * Returns an array of task objects, one per plant instance per action type.
  */
 function generatePlanningTasks(beds, inventory, settings, today) {
-  const todayMonth = today.getMonth() + 1;
+  const m = today.getMonth() + 1;
+  const todayHalf = today.getDate() <= 15 ? m : m + 0.5;
   const tasks = [];
   const buySeedsSeen = new Set(); // emit buy_seeds only once per plantId
 
@@ -141,7 +142,7 @@ function generatePlanningTasks(beds, inventory, settings, today) {
         const plant = PlantDB.get(plantId);
         if (!plant || plant._isPath) return;
 
-        const stage  = getSeasonalStage(plant, todayMonth);
+        const stage  = getSeasonalStage(plant, todayHalf);
         const hasSeed = _planHasSeeds(plantId, inventory);
         const hasTray = _planHasTraySource(plantId, beds);
 
@@ -159,7 +160,7 @@ function generatePlanningTasks(beds, inventory, settings, today) {
 
         // ── buy_seeds — one per plantId, does NOT suppress other tasks ──
         if (lc === 'planned' && !hasSeed && !buySeedsSeen.has(plantId)) {
-          const canDo = (plant.sow?.length || 0) + (plant.tr?.length || 0) > 0;
+          const canDo = (plant.sowIndoor?.length || 0) + (plant.sowOutdoor?.length || 0) > 0;
           if (canDo) {
             buySeedsSeen.add(plantId);
             push({
@@ -176,13 +177,13 @@ function generatePlanningTasks(beds, inventory, settings, today) {
         // ── planned ────────────────────────────────────────────────
         if (lc === 'planned') {
           const method       = _planEffectiveMethod(plant);
-          const canDirectSow  = method === 'direct'     && (plant.sow?.length || 0) > 0;
-          const canTransplant = method === 'transplant' && (plant.sow?.length || 0) > 0;
+          const canDirectSow  = method === 'direct'     && (plant.sowOutdoor?.length || 0) > 0;
+          const canTransplant = method === 'transplant' && (plant.sowIndoor?.length  || 0) > 0;
           if (!canDirectSow && !canTransplant) return;
 
-          const nextStage = _planNextMonthStage(plant, todayMonth);
+          const nextStage = _planNextHalfStage(plant, todayHalf);
 
-          if (stage === 'sowing') {
+          if (stage === 'sowing_indoor') {
             if (canDirectSow)
               push({ ...base, id: makeId(bed.id, instanceId, 'direct_sow'),
                 type: 'direct_sow', urgency: 'now', nextLifecycle: 'direct_sow' });
@@ -190,7 +191,7 @@ function generatePlanningTasks(beds, inventory, settings, today) {
               push({ ...base, id: makeId(bed.id, instanceId, 'start_tray'),
                 type: 'start_tray', urgency: 'now', nextLifecycle: 'tray_seeded' });
 
-          } else if (stage === 'transplanting') {
+          } else if (stage === 'sowing_outdoor') {
             if (hasTray)
               push({ ...base, id: makeId(bed.id, instanceId, 'transplant'),
                 type: 'transplant', urgency: 'now', nextLifecycle: 'transplanted' });
@@ -204,7 +205,7 @@ function generatePlanningTasks(beds, inventory, settings, today) {
             push({ ...base, id: makeId(bed.id, instanceId, 'overdue_sow'),
               type: sowType, urgency: 'overdue', nextLifecycle: sowNext });
 
-          } else if (nextStage === 'sowing' || nextStage === 'transplanting') {
+          } else if (nextStage === 'sowing_indoor' || nextStage === 'sowing_outdoor') {
             const sowType = canDirectSow ? 'direct_sow' : 'start_tray';
             const sowNext = canDirectSow ? 'direct_sow' : 'tray_seeded';
             push({ ...base, id: makeId(bed.id, instanceId, 'upcoming_sow'),
@@ -229,7 +230,7 @@ function generatePlanningTasks(beds, inventory, settings, today) {
           else
             push({ ...base, id: makeId(bed.id, instanceId, 'transplant'),
               type: 'transplant',
-              urgency: (stage === 'transplanting' || stage === 'growing') ? 'now' : 'soon',
+              urgency: (stage === 'sowing_outdoor' || stage === 'growing') ? 'now' : 'soon',
               nextLifecycle: 'transplanted' });
           return;
         }
@@ -239,10 +240,10 @@ function generatePlanningTasks(beds, inventory, settings, today) {
           if (stage === 'harvesting')
             push({ ...base, id: makeId(bed.id, instanceId, 'harvest'),
               type: 'harvest', urgency: 'now', nextLifecycle: 'harvested_once' });
-          else if (_planNextMonthStage(plant, todayMonth) === 'harvesting')
+          else if (_planNextHalfStage(plant, todayHalf) === 'harvesting')
             push({ ...base, id: makeId(bed.id, instanceId, 'prep_harv'),
               type: 'prepare_harvest', urgency: 'soon', nextLifecycle: null });
-          else if (stage === 'growing' || stage === 'perennial' || stage === 'transplanting')
+          else if (stage === 'growing' || stage === 'perennial' || stage === 'sowing_outdoor')
             push({ ...base, id: makeId(bed.id, instanceId, 'maintain'),
               type: 'water_compost_pest', urgency: 'upcoming', nextLifecycle: null });
           return;
