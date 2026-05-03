@@ -46,7 +46,7 @@ const Beds = (() => {
   const JOURNAL_IMAGE_EXTS = ['jpg', 'jpeg', 'png', 'webp', 'gif'];
   const SEED_IMAGE_EXTS = ['jpg', 'jpeg', 'png', 'webp', 'gif'];
 
-  const CELL_SIZE  = 32;         // px per grid cell (visual size)
+  let cellSize = Math.max(16, Math.min(80, parseInt(localStorage.getItem('bedZoom') || '32', 10)));
   const CELL_CM    = 10;         // 10×10 cm logical cell size
   const CELL_M     = CELL_CM / 100;
   const PATH_DEFAULT_CELLS = 1; // default click footprint for path tiles
@@ -747,7 +747,7 @@ const Beds = (() => {
     }
     const wrap = document.querySelector(`#bedblock-${bedId} .bed-grid-wrap`);
     const wrapRect = wrap ? wrap.getBoundingClientRect() : null;
-    const cellStep = CELL_SIZE + 2;
+    const cellStep = cellSize + 2;
     const maxR = Math.min(bed.rows, MAX_CELLS) - 1;
     const maxC = Math.min(bed.cols, MAX_CELLS) - 1;
     let startR = zone.minR, startC = zone.minC;
@@ -778,7 +778,7 @@ const Beds = (() => {
     if (!bed) return;
     const maxR = Math.min(bed.rows, MAX_CELLS) - 1;
     const maxC = Math.min(bed.cols, MAX_CELLS) - 1;
-    const cellStep = CELL_SIZE + 2;
+    const cellStep = cellSize + 2;
     const relX = event.clientX - wrapRect.left;
     const relY = event.clientY - wrapRect.top;
     const curC = Math.max(0, Math.min(maxC, Math.floor((relX - 38) / cellStep)));
@@ -814,7 +814,7 @@ const Beds = (() => {
     zoneMoveState.previewMaxC = newMaxC;
     zoneMoveState.moved = true;
     // Update zone div position directly for smooth dragging
-    const cs = CELL_SIZE;
+    const cs = cellSize;
     const wCells = newMaxC - newMinC + 1;
     const hCells = newMaxR - newMinR + 1;
     const zoneEl = document.getElementById(`plot-zone-${bedId}-${zoneId}`);
@@ -1430,6 +1430,7 @@ const Beds = (() => {
     updateArmedSeedToolbar();
     updateStats();
     updateRotationUi();
+    updateZoomLabel();
   }
 
   // ── bed list (left sidebar) ───────────────────────────────────
@@ -1927,17 +1928,27 @@ const Beds = (() => {
     const useRowSelection = plant?._isPath || !!(rowPlacementMode && (plant?.rowSpacing || 0) > 0);
 
     if (useRowSelection) {
+      let initEndR = r;
+      let initEndC = c;
+      if (!plant?._isPath) {
+        const fp = parseFootprint(plant, selectedRotation);
+        const bed = Store.getBeds().find(b => b.id === bedId);
+        const maxBedR = bed ? Math.min(bed.rows, MAX_CELLS) - 1 : r;
+        const maxBedC = bed ? Math.min(bed.cols, MAX_CELLS) - 1 : c;
+        initEndR = Math.min(r + fp.rows - 1, maxBedR);
+        initEndC = Math.min(c + fp.cols - 1, maxBedC);
+      }
       paintState = {
         bedId,
         rowSelection: true,
         startR: r,
         startC: c,
-        endR: r,
-        endC: c,
+        endR: initEndR,
+        endC: initEndC,
         moved: false,
         hadPlacement: false,
       };
-      showRowSelectionPreview(bedId, r, c, r, c, plant, selectedRotation);
+      showRowSelectionPreview(bedId, r, c, initEndR, initEndC, plant, selectedRotation);
       return;
     }
     if (plant?._isPath) {
@@ -2072,6 +2083,31 @@ const Beds = (() => {
     else stopAutoScrollLoop();
   }
 
+  function rowEndWithMinFootprint(r, c, plant) {
+    if (!plant || plant._isPath) return { endR: r, endC: c };
+    const fp           = parseFootprint(plant, selectedRotation);
+    const rowSpacingCm = plant.rowSpacing || 0;
+
+    const rawRowSpan = Math.abs(r - paintState.startR) + 1;
+    const rawColSpan = Math.abs(c - paintState.startC) + 1;
+
+    const layout = rowLayoutCounts(rawRowSpan, rawColSpan, fp, rowSpacingCm);
+
+    const plannedCm  = planRowSpacingCm(rowSpacingCm);
+    const stepCells  = Math.max(fp.rows, Math.max(1, Math.ceil(plannedCm / CELL_CM)));
+    const minRowSpan = fp.rows + (Math.max(1, layout.rows)   - 1) * stepCells;
+    const minColSpan = fp.cols *  Math.max(1, layout.perRow);
+
+    const endR = r >= paintState.startR
+      ? paintState.startR + minRowSpan - 1
+      : paintState.startR - minRowSpan + 1;
+    const endC = c >= paintState.startC
+      ? paintState.startC + minColSpan - 1
+      : paintState.startC - minColSpan + 1;
+
+    return { endR, endC };
+  }
+
   function updateRowSelectionFromPointer(clientX, clientY) {
     if (!paintState?.rowSelection || !selectedPlantId) return;
     if (!Number.isFinite(clientX) || !Number.isFinite(clientY)) return;
@@ -2083,18 +2119,19 @@ const Beds = (() => {
     const r = parseInt(cellEl.getAttribute('data-r') || '', 10);
     const c = parseInt(cellEl.getAttribute('data-c') || '', 10);
     if (!Number.isInteger(r) || !Number.isInteger(c)) return;
-    if (paintState.endR === r && paintState.endC === c) return;
-    paintState.endR = r;
-    paintState.endC = c;
-    paintState.moved = paintState.moved || paintState.startR !== r || paintState.startC !== c;
     const plant = PlantDB.get(selectedPlantId);
-    if (plant) showRowSelectionPreview(bedId, paintState.startR, paintState.startC, r, c, plant, selectedRotation);
+    const { endR, endC } = rowEndWithMinFootprint(r, c, plant);
+    if (paintState.endR === endR && paintState.endC === endC) return;
+    paintState.endR = endR;
+    paintState.endC = endC;
+    paintState.moved = paintState.moved || endR !== paintState.startR || endC !== paintState.startC;
+    if (plant) showRowSelectionPreview(bedId, paintState.startR, paintState.startC, endR, endC, plant, selectedRotation);
   }
 
   function bedBlockHtml(bed) {
     const cols  = Math.min(bed.cols, MAX_CELLS);
     const rows  = Math.min(bed.rows, MAX_CELLS);
-    const cs    = CELL_SIZE;
+    const cs    = cellSize;
     const count = countBedPlants(bed);
     const invById = new Map(Store.getInventory().map(s => [s.id, s]));
     const bedById = new Map(Store.getBeds().map(b => [b.id, b]));
@@ -2169,6 +2206,7 @@ const Beds = (() => {
 
     let rowsHtml = '';
     const pathLabelOverlays = [];
+    const plantEmojiOverlays = [];
     for (let r = 0; r < rows; r++) {
       rowsHtml += `<div class="bed-row">
         <div class="bed-row-lbl">${isTray ? (r + 1) : `${((r + 1) * CELL_M).toFixed(2)}m`}</div>`;
@@ -2296,17 +2334,39 @@ const Beds = (() => {
               pathLabelOverlays.push(`<div class="gcell-path-block-label" style="left:${left}px;top:${top}px;width:${width}px;height:${height}px;font-size:${fontPx}px" title="${escAttr(pathDesc)}">${escHtml(pathDesc)}</div>`);
             }
           } else {
-            const fontSize = cs >= 56 ? '1.6rem' : (cs >= 40 ? '1.1rem' : '.9rem');
-            const density = densityPerCell(displayPlant);
-            const dimensionLabel = displayCell.rowBlockMode && displayCell.rowBlockTotal > 1
-              ? `<span class="gcell-dimension" style="font-size:.5rem;color:#666;display:block;margin-top:2px">${displayCell.blockCols * CELL_CM}×${displayCell.blockRows * CELL_CM}cm</span>`
-              : '';
-            const dispRgLabel = displayRg?.full || displayRg?.label || 'Crop rotation family';
-            rowsHtml += `<div class="gcell-inner">
-              <div class="gcell-emoji" style="font-size:${fontSize}">${displayPlant.emoji}</div>
-                <div class="gcell-name" title="${escAttr(dispRgLabel)}">${escHtml(displayPlant.name)}${density > 1 ? ` <span class="gcell-density">×${density}</span>` : ''}${dimensionLabel}</div>
-              </div>
-              `;
+            const instCols   = displayMeta?.cols || 1;
+            const instRows   = displayMeta?.rows || 1;
+            const isMultiCell = instCols > 1 || instRows > 1;
+            const isRowBlock  = !!(displayCell.rowBlockMode && displayCell.rowBlockTotal > 1);
+
+            if (isRowBlock || isMultiCell) {
+              const left   = 10 + 28 + (c * (cs + 2));
+              const top    = 10 + 20 + (r * (cs + 2));
+              const width  = (instCols * cs) + ((instCols - 1) * 2);
+              const height = (instRows * cs) + ((instRows - 1) * 2);
+              if (isRowBlock) {
+                const N          = displayCell.rowBlockTotal;
+                const charCount  = String(N).length + 3; // digits + "× " + emoji
+                const fontByH    = Math.floor(height * 0.5);
+                const fontByW    = Math.floor(width / (charCount * 0.65));
+                const fontPx     = Math.max(10, Math.min(fontByH, fontByW));
+                plantEmojiOverlays.push(
+                  `<div class="gcell-row-emoji-overlay" style="left:${left}px;top:${top}px;width:${width}px;height:${height}px;font-size:${fontPx}px">${N}× ${displayPlant.emoji}</div>`
+                );
+              } else {
+                const fontPx = Math.floor(Math.min(width, height) * 0.65);
+                plantEmojiOverlays.push(
+                  `<div class="gcell-plant-overlay" style="left:${left}px;top:${top}px;width:${width}px;height:${height}px;font-size:${fontPx}px">${displayPlant.emoji}</div>`
+                );
+              }
+            } else {
+              const fontSize = cs >= 56 ? '1.6rem' : (cs >= 40 ? '1.1rem' : '.9rem');
+              const dispRgLabel = displayRg?.full || displayRg?.label || 'Crop rotation family';
+              rowsHtml += `<div class="gcell-inner">
+                <div class="gcell-emoji" style="font-size:${fontSize}">${displayPlant.emoji}</div>
+                <div class="gcell-name" title="${escAttr(dispRgLabel)}">${escHtml(displayPlant.name)}</div>
+              </div>`;
+            }
           }
         }
         // Ghost hint for absent annual with no succession: faint emoji so you can tell something is planned
@@ -2332,7 +2392,10 @@ const Beds = (() => {
         if (seasonalMeta && !isAbsentCell && isOrigin) {
           rowsHtml += `<div class="gcell-seasonal-badge" title="${seasonalMeta.label}">${seasonalMeta.icon}</div>`;
         }
-        if (displayPlant && !displayPlant._isPath && (!isAbsentCell || hasSuccession) && !hasSeedImage && !displayIsOrigin && displayIsPerimeterCell) {
+        const displayInstCols = displayMeta?.cols || 1;
+        const displayInstRows = displayMeta?.rows || 1;
+        const displayIsMultiCell = displayInstCols > 1 || displayInstRows > 1;
+        if (displayPlant && !displayPlant._isPath && (!isAbsentCell || hasSuccession) && !hasSeedImage && !displayIsOrigin && displayIsPerimeterCell && !displayIsMultiCell) {
           rowsHtml += `<div class="gcell-edge-icon" aria-hidden="true">${displayPlant.emoji}</div>`;
         }
         rowsHtml += `</div>`;
@@ -2343,6 +2406,9 @@ const Beds = (() => {
     const mappedCountText = mapped.length ? `${mapped.length} mapped bed${mapped.length !== 1 ? 's' : ''}` : '';
     const pathLabelOverlayHtml = pathLabelOverlays.length
       ? `<div style="position:absolute;left:0;top:0;right:0;bottom:0;pointer-events:none;z-index:3">${pathLabelOverlays.join('')}</div>`
+      : '';
+    const plantEmojiOverlayHtml = plantEmojiOverlays.length
+      ? `<div style="position:absolute;left:0;top:0;right:0;bottom:0;pointer-events:none;z-index:2">${plantEmojiOverlays.join('')}</div>`
       : '';
     const mappedOverlayHtml = mapped.length ? `<div style="position:absolute;left:0;top:0;right:0;bottom:0;pointer-events:none;z-index:4">
       ${mapped.map(item => {
@@ -2413,6 +2479,7 @@ const Beds = (() => {
   <div class="bed-grid-wrap" style="position:relative">
     ${colLabels}
     ${rowsHtml}
+    ${plantEmojiOverlayHtml}
     ${pathLabelOverlayHtml}
     ${mappedOverlayHtml}
   </div>
@@ -2756,11 +2823,12 @@ const Beds = (() => {
 
     if (paintState && selectedPlantId && paintState.bedId === bedId && (event?.buttons & 1)) {
       if (paintState.rowSelection) {
-        paintState.endR = r;
-        paintState.endC = c;
-        paintState.moved = paintState.moved || paintState.startR !== r || paintState.startC !== c;
         const plant = PlantDB.get(selectedPlantId);
-        if (plant) showRowSelectionPreview(bedId, paintState.startR, paintState.startC, paintState.endR, paintState.endC, plant, selectedRotation);
+        const { endR, endC } = rowEndWithMinFootprint(r, c, plant);
+        paintState.endR = endR;
+        paintState.endC = endC;
+        paintState.moved = paintState.moved || endR !== paintState.startR || endC !== paintState.startC;
+        if (plant) showRowSelectionPreview(bedId, paintState.startR, paintState.startC, endR, endC, plant, selectedRotation);
         return;
       }
 
@@ -2844,8 +2912,6 @@ const Beds = (() => {
     const spacingLabel = rowSp > 0
       ? `${spW}×${spH} cm plant · ${rowSp} cm between row centers`
       : (spW !== spH ? `↔ ${spW} cm · ↕ ${spH} cm` : `${spW} cm`);
-    const density = densityPerCell(p);
-
     let seedAssignHtml = '';
     if (instanceId && bedId && !p._isPath) {
       const bed = Store.getBeds().find(b => b.id === bedId);
@@ -3162,7 +3228,6 @@ const Beds = (() => {
         <div class="prop-item"><div class="prop-label">💧 Water</div><div class="prop-value">${capFirst(p.water)}</div></div>
         <div class="prop-item"><div class="prop-label">📐 Spacing</div><div class="prop-value">${spacingLabel}</div></div>
         <div class="prop-item"><div class="prop-label">⏱️ Days</div><div class="prop-value">${p.daysToHarvest}</div></div>
-        ${density > 1 ? `<div class="prop-item" style="grid-column:1/-1"><div class="prop-label">🔢 Density</div><div class="prop-value">×${density} plants per cell</div></div>` : ''}
         ${p.family ? `<div class="prop-item" style="grid-column:1/-1"><div class="prop-label">🌿 Family</div><div class="prop-value">${capFirst(p.family)}</div></div>` : ''}
       </div>
       ${stock > 0
@@ -4392,6 +4457,25 @@ const Beds = (() => {
     stopAutoScrollLoop();
   });
 
+  function updateZoomLabel() {
+    const el = document.getElementById('bed-zoom-label');
+    if (el) el.textContent = Math.round(cellSize / 32 * 100) + '%';
+  }
+
+  function zoomIn() {
+    cellSize = Math.min(80, cellSize + 8);
+    localStorage.setItem('bedZoom', cellSize);
+    updateZoomLabel();
+    renderCanvas();
+  }
+
+  function zoomOut() {
+    cellSize = Math.max(16, cellSize - 8);
+    localStorage.setItem('bedZoom', cellSize);
+    updateZoomLabel();
+    renderCanvas();
+  }
+
   return {
     init, renderLibrary, renderCanvas, renderBedList,
     selectBed, openBedJournal, openJournalAll, armPlant, disarm, rotateSelection,
@@ -4407,7 +4491,7 @@ const Beds = (() => {
     setPathConfig,
     updateSelectedPathMeta,
     promptRenameBed,
-    undo, redo, updateStats,
+    undo, redo, updateStats, zoomIn, zoomOut, updateZoomLabel,
     setViewMonth, stepViewMonth, setArmedSeasonalMode,
     setLifecycle, setArmedSeed, setInstanceSeed, setJournalSeason, setJournalBedFilter, setJournalSearch, openJournalEvent,
     handleJournalImageLoad, handleJournalImageError, handleCellImageLoad, handleCellImageError, handlePlantSeedImageLoad, handlePlantSeedImageError, openJournalImage, setJournalPhotoFilename,

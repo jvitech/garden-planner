@@ -1192,6 +1192,24 @@ body {
 
 .cal-bar:not(.cal-bar--active) { background: var(--border); opacity: .25; }
 
+.gcell-plant-overlay {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  line-height: 1;
+}
+.gcell-row-emoji-overlay {
+  position: absolute;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  line-height: 1;
+  overflow: hidden;
+}
 .cal-legend { display: flex; gap: 18px; margin-top: 14px; font-size: .75rem; flex-wrap: wrap; }
 .cal-legend span { display: flex; align-items: center; gap: 5px; }
 .cal-legend-swatch { display: inline-block; width: 12px; height: 12px; border-radius: 2px; }
