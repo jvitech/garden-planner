@@ -1538,7 +1538,7 @@ const Beds = (() => {
       return `
       <div class="plant-card ${selectedPlantId === p.id ? 'active' : ''} ${p._custom ? 'custom-marker' : ''} ${p._edited ? 'edited-marker' : ''}"
            onclick="Beds.armPlant('${p.id}')" title="${escAttr(p.notes||'')}">
-        <div class="pc-emoji">${p.emoji}</div>
+        <div class="pc-emoji">${plantIconHtml(p, 32)}</div>
         <div class="pc-info">
           <div class="pc-name">${escHtml(p.name)}</div>
           <div class="pc-meta">${meta}</div>
@@ -2351,19 +2351,19 @@ const Beds = (() => {
                 const fontByW    = Math.floor(width / (charCount * 0.65));
                 const fontPx     = Math.max(10, Math.min(fontByH, fontByW));
                 plantEmojiOverlays.push(
-                  `<div class="gcell-row-emoji-overlay" style="left:${left}px;top:${top}px;width:${width}px;height:${height}px;font-size:${fontPx}px">${N}× ${displayPlant.emoji}</div>`
+                  `<div class="gcell-row-emoji-overlay" style="left:${left}px;top:${top}px;width:${width}px;height:${height}px;font-size:${fontPx}px">${N}× ${plantIconHtml(displayPlant, fontPx)}</div>`
                 );
               } else {
                 const fontPx = Math.floor(Math.min(width, height) * 0.65);
                 plantEmojiOverlays.push(
-                  `<div class="gcell-plant-overlay" style="left:${left}px;top:${top}px;width:${width}px;height:${height}px;font-size:${fontPx}px">${displayPlant.emoji}</div>`
+                  `<div class="gcell-plant-overlay" style="left:${left}px;top:${top}px;width:${width}px;height:${height}px;font-size:${fontPx}px">${plantIconHtml(displayPlant, fontPx)}</div>`
                 );
               }
             } else {
               const fontSize = cs >= 56 ? '1.6rem' : (cs >= 40 ? '1.1rem' : '.9rem');
               const dispRgLabel = displayRg?.full || displayRg?.label || 'Crop rotation family';
               rowsHtml += `<div class="gcell-inner">
-                <div class="gcell-emoji" style="font-size:${fontSize}">${displayPlant.emoji}</div>
+                <div class="gcell-emoji">${plantIconHtml(displayPlant, Math.round(cs * 0.65))}</div>
                 <div class="gcell-name" title="${escAttr(dispRgLabel)}">${escHtml(displayPlant.name)}</div>
               </div>`;
             }
@@ -2371,11 +2371,11 @@ const Beds = (() => {
         }
         // Ghost hint for absent annual with no succession: faint emoji so you can tell something is planned
         if (isAbsentCell && !hasSuccession && isOrigin) {
-          rowsHtml += `<div class="gcell-absent-ghost" title="${escAttr(plant.name)} — not here this month">${plant.emoji}</div>`;
+          rowsHtml += `<div class="gcell-absent-ghost" title="${escAttr(plant.name)} — not here this month">${plantIconHtml(plant, Math.round(cs * 0.5))}</div>`;
         }
         // Succession indicator badge (bottom-right corner): shows what's hiding underneath
         if (hasSuccession && displayIsOrigin) {
-          rowsHtml += `<div class="gcell-succession-hint" title="Succession: ${escAttr(plant.name)} will be here in-season">${plant.emoji}</div>`;
+          rowsHtml += `<div class="gcell-succession-hint" title="Succession: ${escAttr(plant.name)} will be here in-season">${plantIconHtml(plant, Math.round(cs * 0.45))}</div>`;
         }
         const showDeleteButtonEffective = !!(displayPlant && displayMeta && r === displayMeta.minR && c === displayMeta.maxC);
         if (showDeleteButtonEffective) {
@@ -2396,7 +2396,7 @@ const Beds = (() => {
         const displayInstRows = displayMeta?.rows || 1;
         const displayIsMultiCell = displayInstCols > 1 || displayInstRows > 1;
         if (displayPlant && !displayPlant._isPath && (!isAbsentCell || hasSuccession) && !hasSeedImage && !displayIsOrigin && displayIsPerimeterCell && !displayIsMultiCell) {
-          rowsHtml += `<div class="gcell-edge-icon" aria-hidden="true">${displayPlant.emoji}</div>`;
+          rowsHtml += `<div class="gcell-edge-icon" aria-hidden="true">${plantIconHtml(displayPlant, Math.round(cs * 0.45))}</div>`;
         }
         rowsHtml += `</div>`;
       }
@@ -3168,7 +3168,7 @@ const Beds = (() => {
             if (sources.length) {
               seedImageHtml = `<div style="position:relative;width:120px;height:140px">
                 <img src="${escAttr(sources[0])}" alt="${escAttr(seedLabel(seed))} packet" style="width:100%;height:100%;object-fit:cover;border-radius:4px;border:2px solid #ddd" data-src-list="${escAttr(sources.join('|'))}" data-src-index="0" onload="Beds.handlePlantSeedImageLoad(this)" onerror="Beds.handlePlantSeedImageError(this)" />
-                <div style="display:none;position:absolute;top:0;left:0;width:100%;height:100%;border-radius:4px;border:2px solid #ddd;background:#f5f5f5;font-size:3rem;display:flex;align-items:center;justify-content:center;color:#999">${p.emoji}</div>
+                <div style="display:none;position:absolute;top:0;left:0;width:100%;height:100%;border-radius:4px;border:2px solid #ddd;background:#f5f5f5;font-size:3rem;display:flex;align-items:center;justify-content:center;color:#999">${plantIconHtml(p, 48)}</div>
               </div>`;
             }
           }
@@ -3180,7 +3180,7 @@ const Beds = (() => {
       ${seedAssignHtml}
       ${(() => { const rg = rotationGroup(p); return `
       <div style="display:flex;align-items:center;gap:10px;padding:8px;background:${rg.bg};border-radius:var(--radius);border:2px solid ${rg.border};margin-bottom:8px">`; })()}
-        <div style="font-size:2.2rem">${seedImageHtml ? '' : p.emoji}</div>
+        <div>${seedImageHtml ? '' : plantIconHtml(p, 40)}</div>
         ${seedImageHtml ? `<div style="flex-shrink:0">${seedImageHtml}</div>` : ''}
         <div style="flex:1">
           <div style="font-weight:800;font-size:.95rem">${escHtml(p.name)}</div>
@@ -3235,9 +3235,9 @@ const Beds = (() => {
         : `<div style="margin-top:6px;font-size:.75rem;color:var(--bad);font-weight:700">📦 No seeds in inventory</div>`}
       ${p.notes ? `<div style="margin-top:6px;font-size:.75rem;color:var(--text-muted);line-height:1.5">${escHtml(p.notes)}</div>` : ''}
       ${good.length ? `<div style="margin-top:8px"><div style="font-size:.62rem;font-weight:800;color:#2e7d32;margin-bottom:4px">✅ GOOD COMPANIONS</div>
-        <div class="companion-list">${good.map(q=>`<span class="ctag ctag-good">${q.emoji} ${escHtml(q.name)}</span>`).join('')}</div></div>` : ''}
+        <div class="companion-list">${good.map(q=>`<span class="ctag ctag-good">${plantIconHtml(q, 16)} ${escHtml(q.name)}</span>`).join('')}</div></div>` : ''}
       ${bad.length  ? `<div style="margin-top:6px"><div style="font-size:.62rem;font-weight:800;color:#c62828;margin-bottom:4px">❌ AVOID</div>
-        <div class="companion-list">${bad.map(q=>`<span class="ctag ctag-bad">${q.emoji} ${escHtml(q.name)}</span>`).join('')}</div></div>` : ''}
+        <div class="companion-list">${bad.map(q=>`<span class="ctag ctag-bad">${plantIconHtml(q, 16)} ${escHtml(q.name)}</span>`).join('')}</div></div>` : ''}
       ${pathEditHtml}
       ${rowDetailsHtml}
       ${plantingModeHtml}
@@ -3309,7 +3309,7 @@ const Beds = (() => {
       </div>` : '';
     el.innerHTML = `
       <div style="display:flex;align-items:center;gap:8px;padding:8px;background:#ddf4ea;border-radius:var(--radius);border:2px solid var(--primary-light)">
-        <div style="font-size:2rem">${p.emoji}</div>
+        <div>${plantIconHtml(p, 36)}</div>
         <div style="flex:1">
           <div style="font-weight:800">${escHtml(p.name)}</div>
           <div style="font-size:.68rem;color:var(--text-muted)">${p.spacing} cm${p.rowSpacing ? ` · +${planRowSpacingCm(p.rowSpacing)} cm rows` : ''} (${parseFootprint(p, selectedRotation).cols}×${parseFootprint(p, selectedRotation).rows} cells${selectedRotation ? `, ${selectedRotation}°` : ''})</div>
@@ -3821,7 +3821,7 @@ const Beds = (() => {
           <div class="journal-media">${media}</div>
           <div class="journal-item-copy">
             <div class="journal-item-time">${time}</div>
-            <div class="journal-item-main">${plant?.emoji || '🌱'} ${escHtml(plantName)} · ${escHtml(stateTxt)}${escHtml(qtyTxt)}${escHtml(seedTxt)}${escHtml(bedName)}</div>
+            <div class="journal-item-main">${plant ? plantIconHtml(plant, 18) : '🌱'} ${escHtml(plantName)} · ${escHtml(stateTxt)}${escHtml(qtyTxt)}${escHtml(seedTxt)}${escHtml(bedName)}</div>
             ${note ? `<div class="journal-item-note" style="font-size:.72rem;color:var(--text-muted);margin-top:3px">💬 ${escHtml(note)}</div>` : ''}
           </div>
         </div>
@@ -4021,7 +4021,7 @@ const Beds = (() => {
     if (!body) return;
     body.innerHTML = `
       <div class="form-row" style="font-size:.78rem;color:var(--text-muted)">
-        <strong>${plant?.emoji || '🌱'} ${escHtml(plant?.name || event.plantId)}</strong><br>
+        <strong>${plant ? plantIconHtml(plant, 18) : '🌱'} ${escHtml(plant?.name || event.plantId)}</strong><br>
         ${escHtml(formatJournalEventDate(event))} · ${escHtml(stateTxt)}${escHtml(qtyTxt)}${(event.bedContextName || event.bedName) ? ` · ${escHtml(event.bedContextName || event.bedName)}` : ''}${seed ? ` · ${escHtml(seedLabel(seed))}` : ''}
       </div>
       <div class="form-row">

@@ -420,7 +420,7 @@ const PlanningView = (() => {
 
     return `<div class="planning-card ${um.cls}">
       <div class="planning-card-plant">
-        <span class="planning-card-emoji">${group.plantEmoji}</span>
+        <span class="planning-card-emoji">${plantIconHtml(PlantDB.get(group.plantId), 24)}</span>
         <div class="planning-card-names">
           <strong>${escHtml(group.plantName)} <span class="planning-count">×${count}</span></strong>
           <span class="planning-card-bed">${escHtml(bedLabel)}</span>

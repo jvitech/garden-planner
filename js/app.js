@@ -1220,7 +1220,7 @@ const CustomPlants = (() => {
         ? `<button class="btn btn-danger btn-sm" onclick="CustomPlants.deleteP('${p.id}')">Delete</button>`
         : '';
       return `<tr>
-        <td><span class="plants-row-name">${p.emoji || '🌱'} ${escHtml(p.name)}</span></td>
+        <td><span class="plants-row-name">${plantIconHtml(p, 18)} ${escHtml(p.name)}</span></td>
         <td>${sourceLabel}</td>
         <td>${capFirst(p.cat || 'other')}</td>
         <td>${escHtml(spacing)}</td>
@@ -1603,7 +1603,7 @@ const CalendarView = (() => {
     for (let m = 1; m <= 12; m++) { HALVES.push(m, m + 0.5); }
 
     plants.forEach(p => {
-      h += `<tr><td class="cal-plant-name">${p.emoji} ${escHtml(p.name)}</td>`;
+      h += `<tr><td class="cal-plant-name">${plantIconHtml(p, 18)} ${escHtml(p.name)}</td>`;
       HALVES.forEach(d => {
         const hasIn   = (p.sowIndoor  ?? []).includes(d);
         const hasOut  = (p.sowOutdoor ?? []).includes(d);
@@ -2497,7 +2497,7 @@ const StatsView = (() => {
           }).join('');
           return `<div class="stats-seed-card">
             <div class="stats-seed-head">
-              <span style="font-size:1.3rem;line-height:1">${p?.emoji||'🌱'}</span>
+              <span style="line-height:1">${plantIconHtml(p, 22)}</span>
               <div style="flex:1;min-width:0">
                 <strong>${escHtml(p?.name||seed.plantId)}</strong>${seed.variety ? ` <em style="color:var(--text-muted);font-size:.8rem">${escHtml(seed.variety)}</em>` : ''}
                 ${seed.seedTag ? `<span class="seed-tag-badge" style="margin-left:4px">🏷 ${escHtml(seed.seedTag)}</span>` : ''}
@@ -2681,7 +2681,7 @@ const StatsView = (() => {
             ${plantSectionFilteredRows.map(r => {
               const prev = comparePlantSectionMap.get(r.pid);
               return `<tr>
-              <td>${r.emoji} ${escHtml(r.name)}</td>
+              <td>${plantIconHtml(PlantDB.get(r.pid), 18)} ${escHtml(r.name)}</td>
               <td>${metricHtml(r.planned, prev?.planned)}</td>
               <td>${metricHtml(r.direct_sow, prev?.direct_sow)}</td>
               <td>${metricHtml(r.tray_seeded, prev?.tray_seeded)}</td>
