@@ -3272,6 +3272,40 @@ const Beds = (() => {
         <div class="prop-item"><div class="prop-label">⏱️ Days</div><div class="prop-value">${p.daysToHarvest}</div></div>
         ${p.family ? `<div class="prop-item" style="grid-column:1/-1"><div class="prop-label">🌿 Family</div><div class="prop-value">${capFirst(p.family)}</div></div>` : ''}
       </div>
+      ${(() => {
+        if (p._isPath || (!p.sowIndoor?.length && !p.sowOutdoor?.length && !p.harv?.length)) return '';
+        const settings = Store.getSettings();
+        const HALVES_D = [];
+        for (let m = 1; m <= 12; m++) { HALVES_D.push(m, m + 0.5); }
+        const MO = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+        const hdr = MO.map(m => `<th colspan="2" style="font-size:.54rem;font-weight:600;color:var(--text-muted);text-align:center;padding:0 0 3px;width:calc(100%/12)">${m}</th>`).join('');
+        const cells = HALVES_D.map(d => {
+          const hasIn   = (p.sowIndoor  ?? []).includes(d);
+          const hasOut  = (p.sowOutdoor ?? []).includes(d);
+          const hasHarv = (p.harv       ?? []).includes(d);
+          const frostCls = inOutdoorWindow(d, settings) ? '' : ' cal-bar--frost';
+          const borderCls = halfIsEarly(d) ? '' : ' cal-cell-late';
+          return `<td class="cal-cell${borderCls}" style="padding:1px 0">` +
+            `<div class="cal-bar cal-bar-indoor ${hasIn?'cal-bar--active':''}${frostCls}"></div>` +
+            `<div class="cal-bar cal-bar-outdoor ${hasOut?'cal-bar--active':''}${frostCls}"></div>` +
+            `<div class="cal-bar cal-bar-harvest ${hasHarv?'cal-bar--active':''}"></div>` +
+            `</td>`;
+        }).join('');
+        return `<div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border)">
+          <div style="font-size:.62rem;font-weight:800;color:var(--text-muted);margin-bottom:5px">📅 SOWING &amp; HARVEST</div>
+          <div style="display:flex;gap:10px;font-size:.6rem;color:var(--text-muted);margin-bottom:4px">
+            <span style="display:flex;align-items:center;gap:3px"><span style="display:inline-block;width:9px;height:9px;border-radius:2px;background:#7c3aed"></span>Indoor</span>
+            <span style="display:flex;align-items:center;gap:3px"><span style="display:inline-block;width:9px;height:9px;border-radius:2px;background:#2d7a40"></span>Outdoor</span>
+            <span style="display:flex;align-items:center;gap:3px"><span style="display:inline-block;width:9px;height:9px;border-radius:2px;background:#c08a10"></span>Harvest</span>
+          </div>
+          <div style="overflow-x:auto">
+            <table style="width:100%;border-collapse:collapse;table-layout:fixed">
+              <thead><tr>${hdr}</tr></thead>
+              <tbody><tr>${cells}</tr></tbody>
+            </table>
+          </div>
+        </div>`;
+      })()}
       ${stock > 0
         ? `<div style="margin-top:6px;font-size:.75rem;color:var(--primary-dark);font-weight:700">📦 Seed stock: ${stock} ${stockUnit}</div>`
         : `<div style="margin-top:6px;font-size:.75rem;color:var(--bad);font-weight:700">📦 No seeds in inventory</div>`}
