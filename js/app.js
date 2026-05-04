@@ -1294,6 +1294,7 @@ const CustomPlants = (() => {
       <div class="form-row-inline">
         <div class="form-row" style="flex:.15">
           <label>Icon</label>
+          ${existing && PLANT_ICONS[existing.id] ? `<div style="text-align:center;margin-bottom:4px">${plantIconHtml(existing, 40)}</div>` : ''}
           <input id="cp-emoji" type="text" maxlength="4" value="${existing?.emoji||'🌱'}" style="font-size:1.5rem;text-align:center">
         </div>
         <div class="form-row" style="flex:1">
@@ -1669,6 +1670,7 @@ const BuiltinPlants = (() => {
       <div class="form-row-inline">
         <div class="form-row" style="flex:.15">
           <label>Icon</label>
+          ${PLANT_ICONS[current.id] ? `<div style="text-align:center;margin-bottom:4px">${plantIconHtml(current, 40)}</div>` : ''}
           <input id="bp-emoji" type="text" maxlength="4" value="${escAttr(current.emoji || '🌱')}" style="font-size:1.5rem;text-align:center">
         </div>
         <div class="form-row" style="flex:1">
