@@ -320,6 +320,16 @@ const Beds = (() => {
     return { startR, startC };
   }
 
+  // Place origin at (r,c) directly, only clamping to bed bounds — used for drag moves.
+  function getOriginAt(bed, r, c, footprint) {
+    const maxStartR = Math.max(0, bed.rows - footprint.rows);
+    const maxStartC = Math.max(0, bed.cols - footprint.cols);
+    return { startR: Math.min(maxStartR, Math.max(0, r)), startC: Math.min(maxStartC, Math.max(0, c)) };
+  }
+
+  // O(1) cell element lookup — far faster than querySelector with attribute selectors.
+  function gcellEl(bedId, r, c) { return document.getElementById(`gcell-${bedId}-${r}-${c}`); }
+
   function countBedPlants(bed) {
     let count = 0;
     Object.entries(bed.cells).forEach(([k, v]) => {
@@ -518,7 +528,7 @@ const Beds = (() => {
   function syncPlotAnchorPreview() {
     document.querySelectorAll('.gcell.preview-anchor').forEach(el => el.classList.remove('preview-anchor'));
     if (!plotDrawMode || !plotAnchor) return;
-    const el = document.querySelector(`[data-bed="${plotAnchor.bedId}"][data-r="${plotAnchor.r}"][data-c="${plotAnchor.c}"]`);
+    const el = gcellEl(plotAnchor.bedId, plotAnchor.r, plotAnchor.c);
     if (el) el.classList.add('preview-anchor');
   }
 
@@ -561,7 +571,7 @@ const Beds = (() => {
     const rect = selectionRect(startR, startC, endR, endC);
     for (let rr = rect.minR; rr <= rect.maxR; rr++) {
       for (let cc = rect.minC; cc <= rect.maxC; cc++) {
-        const el = document.querySelector(`[data-bed="${bedId}"][data-r="${rr}"][data-c="${cc}"]`);
+        const el = gcellEl(bedId, rr, cc);
         if (!el) continue;
         el.classList.add('preview-ok');
         if (rr === rect.minR && cc === rect.minC) el.classList.add('preview-origin');
@@ -570,7 +580,7 @@ const Beds = (() => {
     }
 
     const hint = ensureHintEl();
-    const anchor = document.querySelector(`[data-bed="${bedId}"][data-r="${rect.maxR}"][data-c="${rect.maxC}"]`);
+    const anchor = gcellEl(bedId, rect.maxR, rect.maxC);
     if (!anchor) return;
     const aRect = anchor.getBoundingClientRect();
     hint.classList.remove('bad');
@@ -597,7 +607,7 @@ const Beds = (() => {
     const rect = selectionRect(startR, startC, endR, endC);
     for (let rr = rect.minR; rr <= rect.maxR; rr++) {
       for (let cc = rect.minC; cc <= rect.maxC; cc++) {
-        const el = document.querySelector(`[data-bed="${bedId}"][data-r="${rr}"][data-c="${cc}"]`);
+        const el = gcellEl(bedId, rr, cc);
         if (!el) continue;
         el.classList.add('preview-ok');
         if (rr === rect.minR && cc === rect.minC) el.classList.add('preview-origin');
@@ -606,7 +616,7 @@ const Beds = (() => {
       }
     }
 
-    const anchor = document.querySelector(`[data-bed="${bedId}"][data-r="${rect.maxR}"][data-c="${rect.maxC}"]`);
+    const anchor = gcellEl(bedId, rect.maxR, rect.maxC);
     const hint = ensureHintEl();
     if (anchor) {
       const aRect = anchor.getBoundingClientRect();
@@ -1187,6 +1197,7 @@ const Beds = (() => {
 
   function clearInstanceFocus() {
     document.querySelectorAll('.gcell.instance-focus').forEach(el => el.classList.remove('instance-focus'));
+    document.querySelectorAll('.gcell-plant-overlay.instance-focus').forEach(el => el.classList.remove('instance-focus'));
     _syncMultiDeleteBtn(0);
   }
 
@@ -1263,12 +1274,16 @@ const Beds = (() => {
       document.querySelectorAll(`.gcell[data-bed="${t.bedId}"][data-instance="${t.instanceId}"]`).forEach(el => {
         el.classList.add('instance-focus');
       });
+      document.querySelectorAll(`.gcell-plant-overlay[data-bed="${t.bedId}"][data-instance="${t.instanceId}"]`).forEach(el => {
+        el.classList.add('instance-focus');
+      });
     });
     _syncMultiDeleteBtn(selectedLifecycleInstances.length);
   }
 
   function clearInstanceHover() {
     document.querySelectorAll('.gcell.instance-hover').forEach(el => el.classList.remove('instance-hover'));
+    document.querySelectorAll('.gcell-plant-overlay.instance-hover').forEach(el => el.classList.remove('instance-hover'));
   }
 
   function focusInstanceCells(bedId, instanceId) {
@@ -1277,12 +1292,18 @@ const Beds = (() => {
     document.querySelectorAll(`.gcell[data-bed="${bedId}"][data-instance="${instanceId}"]`).forEach(el => {
       el.classList.add('instance-focus');
     });
+    document.querySelectorAll(`.gcell-plant-overlay[data-bed="${bedId}"][data-instance="${instanceId}"]`).forEach(el => {
+      el.classList.add('instance-focus');
+    });
   }
 
   function hoverInstanceCells(bedId, instanceId) {
     clearInstanceHover();
     if (!bedId || !instanceId) return;
     document.querySelectorAll(`.gcell[data-bed="${bedId}"][data-instance="${instanceId}"]`).forEach(el => {
+      el.classList.add('instance-hover');
+    });
+    document.querySelectorAll(`.gcell-plant-overlay[data-bed="${bedId}"][data-instance="${instanceId}"]`).forEach(el => {
       el.classList.add('instance-hover');
     });
   }
@@ -1303,11 +1324,11 @@ const Beds = (() => {
          : plant ? 'Rotation is only available for rectangular footprints' : 'Select a plant first');
   }
 
-  function getPlacementPlan(bed, r, c, plantId, rotation = 0, ignoreInstanceId = null) {
+  function getPlacementPlan(bed, r, c, plantId, rotation = 0, ignoreInstanceId = null, centered = true) {
     const plant = PlantDB.get(plantId);
     if (!plant) return null;
     const fp = parseFootprint(plant, rotation);
-    const origin = getCenteredOrigin(bed, r, c, fp);
+    const origin = centered ? getCenteredOrigin(bed, r, c, fp) : getOriginAt(bed, r, c, fp);
     const ok = canPlaceFootprint(bed, origin.startR, origin.startC, fp, ignoreInstanceId);
     return { plant, fp, origin, ok, rotation };
   }
@@ -1332,7 +1353,7 @@ const Beds = (() => {
 
   function updateHint(bedId, r, c, plant, fp, ok, rotation, mode = 'place') {
     const hint = ensureHintEl();
-    const cellEl = document.querySelector(`[data-bed="${bedId}"][data-r="${r}"][data-c="${c}"]`);
+    const cellEl = gcellEl(bedId, r, c);
     if (!cellEl) {
       hint.style.display = 'none';
       return;
@@ -1348,23 +1369,30 @@ const Beds = (() => {
     hint.style.display = 'block';
   }
 
-  function showPlacementPreview(bedId, bed, r, c, plantId = selectedPlantId, rotation = selectedRotation, ignoreInstanceId = null, mode = 'place') {
+  function showPlacementPreview(bedId, bed, r, c, plantId = selectedPlantId, rotation = selectedRotation, ignoreInstanceId = null, mode = 'place', fpOverride = null) {
     clearPreview();
-    const plan = (plantId === '__path__')
+    const centered = mode !== 'move';
+    const plan = fpOverride
       ? (() => {
-          const fp = { rows: PATH_DEFAULT_CELLS, cols: PATH_DEFAULT_CELLS, widthCm: PATH_DEFAULT_CELLS * CELL_CM, heightCm: PATH_DEFAULT_CELLS * CELL_CM };
-          const origin = getCenteredOrigin(bed, r, c, fp);
-          const ok = canPlaceFootprint(bed, origin.startR, origin.startC, fp, ignoreInstanceId);
-          return { plant: PlantDB.get('__path__'), fp, origin, ok, rotation: 0 };
+          const origin = centered ? getCenteredOrigin(bed, r, c, fpOverride) : getOriginAt(bed, r, c, fpOverride);
+          const ok = canPlaceFootprint(bed, origin.startR, origin.startC, fpOverride, ignoreInstanceId);
+          return { plant: PlantDB.get(plantId), fp: fpOverride, origin, ok, rotation };
         })()
-      : isSeedTrayBed(bed)
-          ? getTrayPlacementPlan(bed, r, c, plantId, ignoreInstanceId)
-          : getPlacementPlan(bed, r, c, plantId, rotation, ignoreInstanceId);
+      : (plantId === '__path__')
+        ? (() => {
+            const fp = { rows: PATH_DEFAULT_CELLS, cols: PATH_DEFAULT_CELLS, widthCm: PATH_DEFAULT_CELLS * CELL_CM, heightCm: PATH_DEFAULT_CELLS * CELL_CM };
+            const origin = centered ? getCenteredOrigin(bed, r, c, fp) : getOriginAt(bed, r, c, fp);
+            const ok = canPlaceFootprint(bed, origin.startR, origin.startC, fp, ignoreInstanceId);
+            return { plant: PlantDB.get('__path__'), fp, origin, ok, rotation: 0 };
+          })()
+        : isSeedTrayBed(bed)
+            ? getTrayPlacementPlan(bed, r, c, plantId, ignoreInstanceId)
+            : getPlacementPlan(bed, r, c, plantId, rotation, ignoreInstanceId, centered);
     if (!plan) return;
 
     for (let rr = plan.origin.startR; rr < plan.origin.startR + plan.fp.rows; rr++) {
       for (let cc = plan.origin.startC; cc < plan.origin.startC + plan.fp.cols; cc++) {
-        const el = document.querySelector(`[data-bed="${bedId}"][data-r="${rr}"][data-c="${cc}"]`);
+        const el = gcellEl(bedId, rr, cc);
         if (!el) continue;
         el.classList.add(plan.ok ? 'preview-ok' : 'preview-blocked');
         if (rr === plan.origin.startR && cc === plan.origin.startC) el.classList.add('preview-origin');
@@ -2030,17 +2058,18 @@ const Beds = (() => {
     if (autoScrollRaf) return;
     const tick = () => {
       autoScrollRaf = null;
-      if (!paintState?.rowSelection || !autoScrollVelY) return;
+      const active = paintState?.rowSelection || dragState;
+      if (!active || !autoScrollVelY) return;
       const canvas = getBedCanvasAreaEl();
       if (!canvas) return;
 
       const prevScrollTop = canvas.scrollTop;
       canvas.scrollTop += autoScrollVelY;
       if (canvas.scrollTop !== prevScrollTop) {
-        updateRowSelectionFromPointer(lastPointerClientX, lastPointerClientY);
+        if (paintState?.rowSelection) updateRowSelectionFromPointer(lastPointerClientX, lastPointerClientY);
       }
 
-      if (paintState?.rowSelection && autoScrollVelY) {
+      if ((paintState?.rowSelection || dragState) && autoScrollVelY) {
         autoScrollRaf = requestAnimationFrame(tick);
       }
     };
@@ -2048,7 +2077,7 @@ const Beds = (() => {
   }
 
   function updateAutoScrollFromPointer(clientX, clientY) {
-    if (!paintState?.rowSelection) {
+    if (!paintState?.rowSelection && !dragState) {
       stopAutoScrollLoop();
       return;
     }
@@ -2200,7 +2229,8 @@ const Beds = (() => {
     const isTray = isSeedTrayBed(bed);
     const isPlot = isPlotBed(bed);
     for (let c = 0; c < cols; c++) {
-      colLabels += `<div class="bed-col-lbl" style="width:${cs}px;height:20px">${isTray ? (c + 1) : `${((c + 1) * CELL_M).toFixed(2)}m`}</div>`;
+      const meterCol = !isTray && (c + 1) % 10 === 0;
+      colLabels += `<div class="bed-col-lbl${meterCol ? ' meter' : ''}" style="width:${cs}px;height:20px">${isTray ? (c + 1) : (meterCol ? `${Math.round((c + 1) * CELL_M)}m` : '')}</div>`;
     }
     colLabels += `</div>`;
 
@@ -2208,8 +2238,9 @@ const Beds = (() => {
     const pathLabelOverlays = [];
     const plantEmojiOverlays = [];
     for (let r = 0; r < rows; r++) {
+      const meterRow = !isTray && (r + 1) % 10 === 0;
       rowsHtml += `<div class="bed-row">
-        <div class="bed-row-lbl">${isTray ? (r + 1) : `${((r + 1) * CELL_M).toFixed(2)}m`}</div>`;
+        <div class="bed-row-lbl${meterRow ? ' meter' : ''}">${isTray ? (r + 1) : (meterRow ? `${Math.round((r + 1) * CELL_M)}m` : '')}</div>`;
       for (let c = 0; c < cols; c++) {
         const key    = `${r},${c}`;
         const cell   = normalizeCellValue(bed.cells[key], key);
@@ -2302,6 +2333,12 @@ const Beds = (() => {
         const absentCls      = (isAbsentCell && !hasSuccession) ? ' gcell-seasonal-absent' : '';
         const terminatedCls  = (isAbsentCell && !hasSuccession && isTerminalAbsence) ? ' gcell-terminated' : '';
         const successionCls  = hasSuccession ? ' gcell-succession' : '';
+        const displayIsMultiCellEarly = !!(displayMeta && ((displayMeta.rows || 1) > 1 || (displayMeta.cols || 1) > 1));
+        const isRowBlockEarly = !!(displayCell?.rowBlockMode && (displayCell?.rowBlockTotal || 0) > 1);
+        const multiMemberCls = (displayPlant && !displayPlant._isPath && (displayIsMultiCellEarly || isRowBlockEarly) && (!isAbsentCell || hasSuccession)) ? ' gcell-multi-member' : '';
+        const mcSharedCls = (displayPlant && !displayPlant._isPath && displayIsMultiCellEarly && (!isAbsentCell || hasSuccession)) ? ' gcell-mc-shared' : '';
+        const meterColCls = !isTray && (c + 1) % 10 === 0 ? ' gcell-meter-col' : '';
+        const meterRowCls = meterRow ? ' gcell-meter-row' : '';
         const pathBg = plant?._isPath ? (cell?.pathColor || '#c8a882') : null;
         const seasonalBg = (seasonalMeta && !pathBg && !isAbsentCell) ? `;background:${seasonalMeta.color}` : '';
         const pathColorStyle = pathBg ? `;background:${pathBg};border-color:${pathBg}` : '';
@@ -2309,7 +2346,7 @@ const Beds = (() => {
           ? `draggable="true" ondragstart="Beds.dragStart(event,'${bed.id}',${r},${c})" ondragend="Beds.dragEnd()"`
           : '';
         const displayInstanceId = hasSuccession ? succCell.instanceId : (cell?.instanceId || '');
-        rowsHtml += `<div class="gcell${effectiveOcc}${effectiveCat}${effectiveRot}${pm}${canPl}${pathCls}${dormantCls}${absentCls}${terminatedCls}${successionCls}"
+        rowsHtml += `<div id="gcell-${bed.id}-${r}-${c}" class="gcell${effectiveOcc}${effectiveCat}${effectiveRot}${pm}${canPl}${pathCls}${dormantCls}${absentCls}${terminatedCls}${successionCls}${multiMemberCls}${mcSharedCls}${meterColCls}${meterRowCls}"
           ${dragAttrs}
           style="width:${cs}px;height:${cs}px${pathColorStyle}${seasonalBg}"
           data-bed="${bed.id}" data-r="${r}" data-c="${c}"
@@ -2350,13 +2387,15 @@ const Beds = (() => {
                 const fontByH    = Math.floor(height * 0.5);
                 const fontByW    = Math.floor(width / (charCount * 0.65));
                 const fontPx     = Math.max(10, Math.min(fontByH, fontByW));
+                const rowRotCls = displayRg ? ` rot-${displayRg.key}` : '';
                 plantEmojiOverlays.push(
-                  `<div class="gcell-row-emoji-overlay" style="left:${left}px;top:${top}px;width:${width}px;height:${height}px;font-size:${fontPx}px">${N}× ${plantIconHtml(displayPlant, fontPx)}</div>`
+                  `<div class="gcell-row-emoji-overlay${rowRotCls}" style="left:${left}px;top:${top}px;width:${width}px;height:${height}px;font-size:${fontPx}px">${N}× ${plantIconHtml(displayPlant, fontPx)}</div>`
                 );
               } else {
                 const fontPx = Math.floor(Math.min(width, height) * 0.65);
+                const mcRotCls = displayRg ? ` rot-${displayRg.key}` : '';
                 plantEmojiOverlays.push(
-                  `<div class="gcell-plant-overlay" style="left:${left}px;top:${top}px;width:${width}px;height:${height}px;font-size:${fontPx}px">${plantIconHtml(displayPlant, fontPx)}</div>`
+                  `<div class="gcell-plant-overlay${mcRotCls}" data-bed="${bed.id}" data-instance="${displayInstanceId}" style="left:${left}px;top:${top}px;width:${width}px;height:${height}px;font-size:${fontPx}px">${plantIconHtml(displayPlant, fontPx)}</div>`
                 );
               }
             } else {
@@ -2408,7 +2447,7 @@ const Beds = (() => {
       ? `<div style="position:absolute;left:0;top:0;right:0;bottom:0;pointer-events:none;z-index:3">${pathLabelOverlays.join('')}</div>`
       : '';
     const plantEmojiOverlayHtml = plantEmojiOverlays.length
-      ? `<div style="position:absolute;left:0;top:0;right:0;bottom:0;pointer-events:none;z-index:2">${plantEmojiOverlays.join('')}</div>`
+      ? `<div style="position:absolute;left:0;top:0;right:0;bottom:0;pointer-events:none;z-index:5">${plantEmojiOverlays.join('')}</div>`
       : '';
     const mappedOverlayHtml = mapped.length ? `<div style="position:absolute;left:0;top:0;right:0;bottom:0;pointer-events:none;z-index:4">
       ${mapped.map(item => {
@@ -2647,7 +2686,10 @@ const Beds = (() => {
     const bed = Store.getBeds().find(b => b.id === bedId);
     if (!bed) return;
     const ignoreInstanceId = bedId === dragState.sourceBedId ? dragState.instanceId : null;
-    showPlacementPreview(bedId, bed, r, c, dragState.plantId, dragState.rotation, ignoreInstanceId, 'move');
+    const fpOverride = (dragState.blockRows > 0 && dragState.blockCols > 0)
+      ? { rows: dragState.blockRows, cols: dragState.blockCols, widthCm: dragState.blockCols * CELL_CM, heightCm: dragState.blockRows * CELL_CM }
+      : null;
+    showPlacementPreview(bedId, bed, r, c, dragState.plantId, dragState.rotation, ignoreInstanceId, 'move', fpOverride);
   }
 
   function drop(event, bedId, r, c) {
@@ -2670,11 +2712,11 @@ const Beds = (() => {
           widthCm: dragState.blockCols * CELL_CM,
           heightCm: dragState.blockRows * CELL_CM,
         };
-        const origin = getCenteredOrigin(targetBed, r, c, fp);
+        const origin = getOriginAt(targetBed, r, c, fp);
         const ok = canPlaceFootprint(targetBed, origin.startR, origin.startC, fp, ignoreInstanceId);
         return { fp, origin, ok };
       }
-      return getPlacementPlan(targetBed, r, c, dragState.plantId, dragState.rotation, ignoreInstanceId);
+      return getPlacementPlan(targetBed, r, c, dragState.plantId, dragState.rotation, ignoreInstanceId, false);
     })();
     if (!plan?.ok) {
       Toast.show('Cannot move plant there');
@@ -3058,7 +3100,7 @@ const Beds = (() => {
       <div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border)">
         <div style="font-size:.62rem;font-weight:800;color:var(--text-muted);margin-bottom:5px">🌿 GROWTH STATUS</div>
         ${selectionCount > 1 ? `<div style="font-size:.68rem;color:var(--text-muted);margin-bottom:5px">Applying changes to <strong>${selectionCount}</strong> selected instances</div>` : ''}
-        <div style="font-size:.72rem;margin-bottom:6px">Now: <strong style="color:${meta.color}">${meta.icon} ${meta.label}</strong></div>
+        <div style="font-size:.72rem;margin-bottom:6px;padding:4px 8px;border-radius:5px;background:${meta.color}22;border-left:3px solid ${meta.color}">Now: <strong style="color:${meta.color}">${meta.icon} ${meta.label}</strong></div>
         ${started ? `<div style="font-size:.72rem;margin-bottom:5px"><strong>Start date:</strong> ${escHtml(new Date(`${started.date}T12:00:00`).toLocaleDateString())} (${LC_META[started.state]?.label || started.state})</div>` : '<div style="font-size:.72rem;margin-bottom:5px;color:var(--text-muted)">Start date: not started yet (set Direct sowing or Seedling tray)</div>'}
         <div style="font-size:.68rem;color:var(--text-muted);margin-bottom:6px">${escHtml(germinationHint)}</div>
         <div style="display:flex;gap:6px;align-items:center;max-width:100%">
@@ -3884,7 +3926,7 @@ const Beds = (() => {
           lastClickedCell = { bedId: bed.id, r, c };
           selectedLifecycleInstances = [{ bedId: bed.id, instanceId: cell.instanceId }];
           showPlantInfo(plant, cell.rotation || 0, cell.instanceId, bed.id);
-          const cellEl = document.querySelector(`[data-bed="${bed.id}"][data-r="${r}"][data-c="${c}"]`);
+          const cellEl = gcellEl(bed.id, r, c);
           if (cellEl) cellEl.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'center' });
         }
       } else {
@@ -4435,6 +4477,13 @@ const Beds = (() => {
     lastPointerClientY = event.clientY;
     updateAutoScrollFromPointer(event.clientX, event.clientY);
     updateRowSelectionFromPointer(event.clientX, event.clientY);
+  });
+
+  document.addEventListener('dragover', event => {
+    if (!dragState) return;
+    lastPointerClientX = event.clientX;
+    lastPointerClientY = event.clientY;
+    updateAutoScrollFromPointer(event.clientX, event.clientY);
   });
 
   document.addEventListener('scroll', event => {

@@ -13,7 +13,6 @@ zucchini: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><path d="
 
 squash: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><ellipse cx="32" cy="42" rx="20" ry="16" fill="#FF8F00"/><ellipse cx="32" cy="28" rx="13" ry="11" fill="#FFA000"/><rect x="30" y="12" width="4" height="10" rx="2" fill="#5D4037"/><ellipse cx="36" cy="13" rx="4" ry="2" fill="#43A047"/></svg>`,
 
-pumpkin: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><defs><clipPath id="pc"><path d="M32 12 C35 12 37 14 38 16 C39 14 41 13 43 14 C45 14 48 22 50 24 C52 20 54 19 56 20 C58 20 62 30 62 40 C62 52 50 62 32 62 C14 62 2 52 2 40 C2 30 4 20 8 20 C10 19 12 20 14 24 C16 22 18 14 21 14 C23 14 25 14 26 16 C27 14 29 12 32 12Z"/></clipPath></defs><path d="M32 12 C35 12 37 14 38 16 C39 14 41 13 43 14 C45 14 48 22 50 24 C52 20 54 19 56 20 C58 20 62 30 62 40 C62 52 50 62 32 62 C14 62 2 52 2 40 C2 30 4 20 8 20 C10 19 12 20 14 24 C16 22 18 14 21 14 C23 14 25 14 26 16 C27 14 29 12 32 12Z" fill="#FF7722"/><g clip-path="url(#pc)" fill="none" stroke="#CC4400" stroke-linecap="round"><path d="M14 22 C13 34 13 50 14 64" stroke-width="3.5"/><path d="M26 14 C25 30 25 48 26 64" stroke-width="2.5"/><path d="M38 14 C39 30 39 48 38 64" stroke-width="2.5"/><path d="M50 22 C51 34 51 50 50 64" stroke-width="3.5"/></g><rect x="29" y="2" width="6" height="12" rx="3" fill="#558B2F"/></svg>`,
 
 
 spinach: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><ellipse cx="32" cy="36" rx="22" ry="26" fill="#2E7D32"/><ellipse cx="32" cy="36" rx="14" ry="20" fill="#388E3C"/><line x1="32" y1="12" x2="32" y2="58" stroke="#1B5E20" stroke-width="2.5"/><line x1="20" y1="28" x2="32" y2="36" stroke="#1B5E20" stroke-width="1.5"/><line x1="44" y1="28" x2="32" y2="36" stroke="#1B5E20" stroke-width="1.5"/><line x1="16" y1="42" x2="32" y2="46" stroke="#1B5E20" stroke-width="1.5"/><line x1="48" y1="42" x2="32" y2="46" stroke="#1B5E20" stroke-width="1.5"/></svg>`,
@@ -124,9 +123,14 @@ __path__: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect x="
 
 };
 
+// Pre-encode all SVG strings once at startup so encodeURIComponent is never called at render time.
+const _PLANT_ICON_URLS = {};
+for (const id in PLANT_ICONS) {
+  _PLANT_ICON_URLS[id] = 'data:image/svg+xml,' + encodeURIComponent(PLANT_ICONS[id]);
+}
+
 function plantIconHtml(plant, px) {
-  const svg = plant && PLANT_ICONS[plant.id];
-  if (!svg) return plant?.emoji ?? '🌱';
-  const enc = encodeURIComponent(svg);
-  return `<img src="data:image/svg+xml,${enc}" width="${px}" height="${px}" alt="${plant.name}" style="display:inline-block;vertical-align:middle;flex-shrink:0">`;
+  const url = plant && _PLANT_ICON_URLS[plant.id];
+  if (!url) return plant?.emoji ?? '🌱';
+  return `<img src="${url}" width="${px}" height="${px}" alt="${plant.name}" style="display:inline-block;vertical-align:middle;flex-shrink:0">`;
 }
