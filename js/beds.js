@@ -40,6 +40,9 @@ const Beds = (() => {
   let lastPointerClientY = null;
   let autoScrollRaf = null;
   let autoScrollVelY = 0;
+  // Per-bed: the chain entry the user lifted to the top via a chain label.
+  // In-memory only — reset on reload. null/missing → default ordering applies.
+  const liftedInstanceByBed = new Map();
 
   const JOURNAL_IMAGE_DIR = 'photos/journal';
   const SEED_IMAGE_DIR = 'photos/seeds';
@@ -498,6 +501,7 @@ const Beds = (() => {
             const sc = normalizeCellValue(slotCells[k], k);
             if (sc?.instanceId === sid) delete slotCells[k];
           });
+          if (liftedInstanceByBed.get(bed.id) === sid) liftedInstanceByBed.delete(bed.id);
           return true;
         }
       }
@@ -510,10 +514,16 @@ const Beds = (() => {
       const cell = normalizeCellValue(v, k);
       if (cell?.instanceId === instanceId) {
         delete bed.cells[k];
-        // Clean up all succession slots sharing this cell key
-        slots.forEach(slot => { if (slot.cells[k]) delete slot.cells[k]; });
+        // Clean up succession slot cells that belong to THIS instance only.
+        // Without the instanceId check, a succession plant overlapping the
+        // dragged primary's coords would lose those cells when the primary moves.
+        slots.forEach(slot => {
+          const slotCell = normalizeCellValue(slot.cells[k], k);
+          if (slotCell?.instanceId === instanceId) delete slot.cells[k];
+        });
       }
     });
+    if (liftedInstanceByBed.get(bed.id) === instanceId) liftedInstanceByBed.delete(bed.id);
     return true;
   }
 
@@ -2280,13 +2290,21 @@ const Beds = (() => {
           }
         }
 
-        // ── Succession chain: walk slots to find the active succession plant ──────────────
-        const primaryIsAbsentOrEmpty = !plant || isAbsentCell;
-        let activeSuccSlot = -1;
-        let activeSuccCell = null;
-        let activeSuccPlant = null;
-        let activeSuccMeta = null;
-        if (primaryIsAbsentOrEmpty) {
+        // ── Active chain: collect every plant at this cell that is currently in-season ─
+        // Primary is always considered first; then each succession slot in order.
+        // `isCellAbsent` already encodes both terminal-lifecycle and seasonal-month logic,
+        // so the date-based filtering the user described comes for free.
+        const isTerminalAbsence = cell && TERMINAL_STATES.has(lifecycle);
+        const chainAtCell = [];
+        if (cell && plant && !isAbsentCell) {
+          chainAtCell.push({ slotIndex: -1, cell, plant, meta, lifecycle, isOrigin });
+        }
+        // Walk succession slots whenever the primary is absent/empty OR when a month
+        // is selected (so concurrent overlaps surface as a stack). Outside month view
+        // we still need terminal succession (primary harvested → succession takes over),
+        // which is covered by the `!primaryActive` clause.
+        const primaryActive = !!(cell && plant && !isAbsentCell);
+        if (selectedViewMonth !== null || !primaryActive) {
           const slots = getSuccessionSlots(bed);
           for (let si = 0; si < slots.length; si++) {
             const slotRaw = (slots[si].cells || {})[key];
@@ -2294,59 +2312,87 @@ const Beds = (() => {
             const slotCell = normalizeCellValue(slotRaw, key);
             const slotPlant = slotCell ? PlantDB.get(slotCell.plantId) : null;
             if (!slotPlant) continue;
-            // Succession plant is active when it is NOT absent itself.
-            // Pass the instanceMeta lifecycle so non-origin cells resolve the correct state.
-            const slotMeta = slotsInstanceMeta[si]?.[slotCell.instanceId];
-            if (!isCellAbsent(slotCell, slotPlant, slotMeta?.lifecycle)) {
-              activeSuccSlot = si;
-              activeSuccCell = slotCell;
-              activeSuccPlant = slotPlant;
-              activeSuccMeta = slotsInstanceMeta[si]?.[slotCell.instanceId] || null;
-              break;
-            }
+            const slotMeta = slotsInstanceMeta[si]?.[slotCell.instanceId] || null;
+            const slotLc   = slotMeta?.lifecycle;
+            if (isCellAbsent(slotCell, slotPlant, slotLc)) continue;
+            chainAtCell.push({
+              slotIndex: si,
+              cell: slotCell,
+              plant: slotPlant,
+              meta: slotMeta,
+              lifecycle: slotLc,
+              isOrigin: !!slotCell.origin,
+            });
           }
         }
-        // hasSuccession: active when primary is absent AND a slot has an active plant.
-        // Terminal-state absence works in any view; seasonal absence requires month view.
-        const isTerminalAbsence = cell && TERMINAL_STATES.has(lifecycle);
-        const hasSuccession = primaryIsAbsentOrEmpty && activeSuccSlot >= 0 &&
-          (isTerminalAbsence || selectedViewMonth !== null || !plant);
-        const succCell  = activeSuccCell;   // backward-compat alias used below
-        const succPlant = activeSuccPlant;
-        const displayCell     = hasSuccession ? activeSuccCell  : cell;
-        const displayPlant    = hasSuccession ? activeSuccPlant : plant;
-        const displayMeta     = hasSuccession ? activeSuccMeta  : meta;
-        const displayIsOrigin = hasSuccession ? !!activeSuccCell.origin : isOrigin;
-        const displayRg       = displayPlant && !displayPlant._isPath ? rotationGroup(displayPlant) : null;
+
+        // Pick the active chain entry: the user-lifted one if it exists at this cell,
+        // otherwise the first non-absent entry (primary preferred, then succession order).
+        const liftedId = liftedInstanceByBed.get(bed.id) || null;
+        const liftedEntry = liftedId ? chainAtCell.find(e => e.cell?.instanceId === liftedId) : null;
+        const activeEntry = liftedEntry || chainAtCell[0] || null;
+
+        // Single-plant display data. Falls back to primary cell context when nothing
+        // is active so the absent-ghost path still works.
+        const displayCell      = activeEntry ? activeEntry.cell  : cell;
+        const displayPlant     = activeEntry ? activeEntry.plant : plant;
+        const displayMeta      = activeEntry ? activeEntry.meta  : meta;
+        const displayIsOrigin  = activeEntry ? !!activeEntry.isOrigin : isOrigin;
+        const displayLifecycle = activeEntry ? (activeEntry.lifecycle || 'planned') : lifecycle;
+        const displayRg        = displayPlant && !displayPlant._isPath ? rotationGroup(displayPlant) : null;
         const displayIsPerimeterCell = !!(displayMeta && (r === displayMeta.minR || r === displayMeta.maxR || c === displayMeta.minC || c === displayMeta.maxC));
 
-        // Absent cells look like empty cells — no occupied styling, no rotation tint
-        // (unless a succession plant is present, in which case it looks occupied by succession)
-        const effectiveOcc = (displayPlant && !isAbsentCell) || hasSuccession ? ' occupied' : '';
-        const effectiveCat = (displayPlant && (!isAbsentCell || hasSuccession)) ? ` cat-${displayPlant._isPath ? 'path' : (displayPlant.cat || 'other')}` : '';
-        const effectiveRot = (displayPlant && (!isAbsentCell || hasSuccession)) ? (displayRg ? ` rot-${displayRg.key}` : '') : '';
+        // Whether the active plant is a succession (non-primary) entry. Drag is only
+        // available for the primary because dragStart reads bed.cells directly.
+        const activeIsSuccession = !!(activeEntry && activeEntry.slotIndex >= 0);
+
+        // Build the chain-label stack — only when more than one plant in the chain
+        // shares this cell origin. Each label is clickable; clicking a non-active
+        // label lifts that plant to the top, clicking the active label opens info.
+        const showChainLabels = chainAtCell.length >= 2 && !!activeEntry && displayIsOrigin && !displayPlant?._isPath;
+        let chainLabelsHtml = '';
+        if (showChainLabels) {
+          chainLabelsHtml = `<div class="gcell-chain-labels" onmousedown="event.stopPropagation()">`;
+          for (const e of chainAtCell) {
+            const isActiveLabel = e === activeEntry;
+            const eRg = e.plant && !e.plant._isPath ? rotationGroup(e.plant) : null;
+            const eRot = eRg ? ` rot-${eRg.key}` : '';
+            const activeCls = isActiveLabel ? ' active' : '';
+            const tipBase = isActiveLabel ? 'click for info' : 'click to bring to front';
+            const tip = `${e.plant.name} — ${tipBase}`;
+            chainLabelsHtml += `<button type="button" class="gcell-chain-label${activeCls}${eRot}"`
+              + ` onclick="Beds.liftPlant(event,'${bed.id}','${e.cell.instanceId}')"`
+              + ` title="${escAttr(tip)}">${plantIconHtml(e.plant, 11)} ${escHtml(e.plant.name)}</button>`;
+          }
+          chainLabelsHtml += `</div>`;
+        }
+
+        // Cell occupancy / chrome derived from the active plant.
+        const cellHasActive = chainAtCell.length > 0;
+        const effectiveOcc = cellHasActive ? ' occupied' : '';
+        const effectiveCat = (cellHasActive && displayPlant) ? ` cat-${displayPlant._isPath ? 'path' : (displayPlant.cat || 'other')}` : '';
+        const effectiveRot = (cellHasActive && displayRg) ? ` rot-${displayRg.key}` : '';
         const pm     = selectedPlantId ? ' placing-mode' : '';
-        const canPl  = (!plant && !hasSuccession) ? ' can-place' : '';
-        const pathCls = plant?._isPath ? ' gcell-path' : '';
+        const canPl  = (!cellHasActive) ? ' can-place' : '';
+        const pathCls = displayPlant?._isPath ? ' gcell-path' : '';
         const dormantCls = isDormantCell ? ' gcell-dormant' : '';
-        // Absent class only when truly absent (no succession occupying it)
-        const absentCls      = (isAbsentCell && !hasSuccession) ? ' gcell-seasonal-absent' : '';
-        const terminatedCls  = (isAbsentCell && !hasSuccession && isTerminalAbsence) ? ' gcell-terminated' : '';
-        const successionCls  = hasSuccession ? ' gcell-succession' : '';
+        // Absent class only when truly absent (no plant of any kind occupying it)
+        const absentCls      = (isAbsentCell && !cellHasActive) ? ' gcell-seasonal-absent' : '';
+        const terminatedCls  = (isAbsentCell && !cellHasActive && isTerminalAbsence) ? ' gcell-terminated' : '';
         const displayIsMultiCellEarly = !!(displayMeta && ((displayMeta.rows || 1) > 1 || (displayMeta.cols || 1) > 1));
         const isRowBlockEarly = !!(displayCell?.rowBlockMode && (displayCell?.rowBlockTotal || 0) > 1);
-        const multiMemberCls = (displayPlant && !displayPlant._isPath && (displayIsMultiCellEarly || isRowBlockEarly) && (!isAbsentCell || hasSuccession)) ? ' gcell-multi-member' : '';
-        const mcSharedCls = (displayPlant && !displayPlant._isPath && displayIsMultiCellEarly && (!isAbsentCell || hasSuccession)) ? ' gcell-mc-shared' : '';
+        const multiMemberCls = (displayPlant && !displayPlant._isPath && (displayIsMultiCellEarly || isRowBlockEarly) && cellHasActive) ? ' gcell-multi-member' : '';
+        const mcSharedCls = (displayPlant && !displayPlant._isPath && displayIsMultiCellEarly && cellHasActive) ? ' gcell-mc-shared' : '';
         const meterColCls = !isTray && (c + 1) % 10 === 0 ? ' gcell-meter-col' : '';
         const meterRowCls = meterRow ? ' gcell-meter-row' : '';
-        const pathBg = plant?._isPath ? (cell?.pathColor || '#c8a882') : null;
+        const pathBg = displayPlant?._isPath ? (displayCell?.pathColor || '#c8a882') : null;
         const seasonalBg = (seasonalMeta && !pathBg && !isAbsentCell) ? `;background:${seasonalMeta.color}` : '';
         const pathColorStyle = pathBg ? `;background:${pathBg};border-color:${pathBg}` : '';
-        const dragAttrs = (displayPlant && displayIsOrigin && !plant?._isPath)
+        const dragAttrs = (!activeIsSuccession && displayPlant && displayIsOrigin && !displayPlant?._isPath)
           ? `draggable="true" ondragstart="Beds.dragStart(event,'${bed.id}',${r},${c})" ondragend="Beds.dragEnd()"`
           : '';
-        const displayInstanceId = hasSuccession ? succCell.instanceId : (cell?.instanceId || '');
-        rowsHtml += `<div id="gcell-${bed.id}-${r}-${c}" class="gcell${effectiveOcc}${effectiveCat}${effectiveRot}${pm}${canPl}${pathCls}${dormantCls}${absentCls}${terminatedCls}${successionCls}${multiMemberCls}${mcSharedCls}${meterColCls}${meterRowCls}"
+        const displayInstanceId = displayCell?.instanceId || '';
+        rowsHtml += `<div id="gcell-${bed.id}-${r}-${c}" class="gcell${effectiveOcc}${effectiveCat}${effectiveRot}${pm}${canPl}${pathCls}${dormantCls}${absentCls}${terminatedCls}${multiMemberCls}${mcSharedCls}${meterColCls}${meterRowCls}"
           ${dragAttrs}
           style="width:${cs}px;height:${cs}px${pathColorStyle}${seasonalBg}"
           data-bed="${bed.id}" data-r="${r}" data-c="${c}"
@@ -2357,7 +2403,7 @@ const Beds = (() => {
           onmouseleave="Beds.cellLeave('${bed.id}')"
           ondragover="Beds.dragOver(event,'${bed.id}',${r},${c})"
           ondrop="Beds.drop(event,'${bed.id}',${r},${c})">`;
-        if (displayPlant && displayIsOrigin && (!isAbsentCell || hasSuccession)) {
+        if (displayPlant && displayIsOrigin && cellHasActive) {
           if (displayPlant._isPath) {
             const pathDesc = displayCell?.pathDesc || '';
             if (pathDesc) {
@@ -2389,13 +2435,13 @@ const Beds = (() => {
                 const fontPx     = Math.max(10, Math.min(fontByH, fontByW));
                 const rowRotCls = displayRg ? ` rot-${displayRg.key}` : '';
                 plantEmojiOverlays.push(
-                  `<div class="gcell-row-emoji-overlay${rowRotCls}" style="left:${left}px;top:${top}px;width:${width}px;height:${height}px;font-size:${fontPx}px">${N}× ${plantIconHtml(displayPlant, fontPx)}</div>`
+                  `<div class="gcell-row-emoji-overlay${rowRotCls}" style="left:${left}px;top:${top}px;width:${width}px;height:${height}px;font-size:${fontPx}px">${N}× ${plantIconHtml(displayPlant, fontPx)}${chainLabelsHtml}</div>`
                 );
               } else {
                 const fontPx = Math.floor(Math.min(width, height) * 0.65);
                 const mcRotCls = displayRg ? ` rot-${displayRg.key}` : '';
                 plantEmojiOverlays.push(
-                  `<div class="gcell-plant-overlay${mcRotCls}" data-bed="${bed.id}" data-instance="${displayInstanceId}" style="left:${left}px;top:${top}px;width:${width}px;height:${height}px;font-size:${fontPx}px">${plantIconHtml(displayPlant, fontPx)}</div>`
+                  `<div class="gcell-plant-overlay${mcRotCls}" data-bed="${bed.id}" data-instance="${displayInstanceId}" style="left:${left}px;top:${top}px;width:${width}px;height:${height}px;font-size:${fontPx}px">${plantIconHtml(displayPlant, fontPx)}${chainLabelsHtml}</div>`
                 );
               }
             } else {
@@ -2404,25 +2450,25 @@ const Beds = (() => {
               rowsHtml += `<div class="gcell-inner">
                 <div class="gcell-emoji">${plantIconHtml(displayPlant, Math.round(cs * 0.65))}</div>
                 <div class="gcell-name" title="${escAttr(dispRgLabel)}">${escHtml(displayPlant.name)}</div>
+                ${chainLabelsHtml}
               </div>`;
             }
           }
         }
-        // Ghost hint for absent annual with no succession: faint emoji so you can tell something is planned
-        if (isAbsentCell && !hasSuccession && isOrigin) {
+        // Ghost hint for absent annual with no active occupant: faint emoji so you can tell something is planned
+        if (isAbsentCell && !cellHasActive && isOrigin) {
           rowsHtml += `<div class="gcell-absent-ghost" title="${escAttr(plant.name)} — not here this month">${plantIconHtml(plant, Math.round(cs * 0.5))}</div>`;
         }
-        // Succession indicator badge (bottom-right corner): shows what's hiding underneath
-        if (hasSuccession && displayIsOrigin) {
-          rowsHtml += `<div class="gcell-succession-hint" title="Succession: ${escAttr(plant.name)} will be here in-season">${plantIconHtml(plant, Math.round(cs * 0.45))}</div>`;
-        }
-        const showDeleteButtonEffective = !!(displayPlant && displayMeta && r === displayMeta.minR && c === displayMeta.maxC);
+        // Hide the per-cell ✕ when 2+ plants share the cell — ambiguous which one
+        // the click would remove. User deletes specific plants via the info panel.
+        const showDeleteButtonEffective = chainAtCell.length < 2
+          && !!(displayPlant && displayMeta && r === displayMeta.minR && c === displayMeta.maxC);
         if (showDeleteButtonEffective) {
           rowsHtml += `<button class="gcell-del" onclick="Beds.removePlant(event,'${bed.id}',${r},${c})">✕</button>`;
         }
-        const displayLcMeta = LC_META[(hasSuccession ? succCell?.lifecycle : lifecycle) || 'planned'] || LC_META.planned;
+        const displayLcMeta = LC_META[displayLifecycle || 'planned'] || LC_META.planned;
         const displayShowLifecycleStrip = !!(displayMeta && (!( displayMeta.rows > 1 || displayMeta.cols > 1) || r === displayMeta.maxR));
-        if (displayPlant && !displayPlant._isPath && (!isAbsentCell || hasSuccession) && displayShowLifecycleStrip) {
+        if (displayPlant && !displayPlant._isPath && cellHasActive && displayShowLifecycleStrip) {
           rowsHtml += `<div class="gcell-lc-strip" style="background:${displayLcMeta.color}" title="${displayLcMeta.label}"></div>`;
         }
         if (seasonalMeta && !isAbsentCell && showLifecycleStrip) {
@@ -2434,7 +2480,7 @@ const Beds = (() => {
         const displayInstCols = displayMeta?.cols || 1;
         const displayInstRows = displayMeta?.rows || 1;
         const displayIsMultiCell = displayInstCols > 1 || displayInstRows > 1;
-        if (displayPlant && !displayPlant._isPath && (!isAbsentCell || hasSuccession) && !hasSeedImage && !displayIsOrigin && displayIsPerimeterCell && !displayIsMultiCell) {
+        if (displayPlant && !displayPlant._isPath && cellHasActive && !hasSeedImage && !displayIsOrigin && displayIsPerimeterCell && !displayIsMultiCell) {
           rowsHtml += `<div class="gcell-edge-icon" aria-hidden="true">${plantIconHtml(displayPlant, Math.round(cs * 0.45))}</div>`;
         }
         rowsHtml += `</div>`;
@@ -2526,6 +2572,45 @@ const Beds = (() => {
   }
 
   // ── cell interactions ─────────────────────────────────────────
+
+  // Open the plant info panel for a specific instance (used by chain labels).
+  // Mirrors the "normal click" branch of cellClick but targets an explicit instance
+  // instead of resolving via cell coords.
+  function showInfoForInstance(bedId, instanceId) {
+    const beds = Store.getBeds();
+    const bed = beds.find(b => b.id === bedId);
+    if (!bed) return;
+    const originResult = findOriginCell(bed, instanceId);
+    const originCell = originResult?.cell;
+    if (!originCell) return;
+    const plant = PlantDB.get(originCell.plantId);
+    if (!plant) return;
+    const target = { bedId, instanceId };
+    selectedLifecycleInstances = [target];
+    lastClickedInstance = target;
+    const [or, oc] = (originResult.key || '0,0').split(',').map(Number);
+    lastClickedCell = { bedId, r: or, c: oc };
+    focusSelectedInstances();
+    showPlantInfo(plant, originCell.rotation || 0, instanceId, bedId);
+    updateModePill();
+  }
+
+  // Lift a chain entry to the top in its bed view, or open its info panel
+  // when its label is re-clicked (the active label).
+  function liftPlant(event, bedId, instanceId) {
+    if (event) {
+      event.stopPropagation();
+      event.preventDefault();
+    }
+    const current = liftedInstanceByBed.get(bedId) || null;
+    if (current === instanceId) {
+      showInfoForInstance(bedId, instanceId);
+      return;
+    }
+    liftedInstanceByBed.set(bedId, instanceId);
+    renderBedList();
+  }
+
   function cellClick(event, bedId, r, c) {
     if (ignoreNextClick) {
       ignoreNextClick = false;
@@ -4418,6 +4503,7 @@ const Beds = (() => {
 
     Store.deleteBed(id);
     if (plotAnchor?.bedId === id) plotAnchor = null;
+    liftedInstanceByBed.delete(id);
     if (activeBedId === id) activeBedId = Store.getBeds()[0]?.id ?? null;
     renderBedList();
     renderCanvas();
@@ -4562,7 +4648,7 @@ const Beds = (() => {
   return {
     init, renderLibrary, renderCanvas, renderBedList,
     selectBed, openBedJournal, openJournalAll, armPlant, disarm, rotateSelection,
-    cellClick, removePlant, removeSelectedPlants, cellEnter, cellLeave,
+    cellClick, liftPlant, removePlant, removeSelectedPlants, cellEnter, cellLeave,
     cellMouseDown,
     dragStart, dragOver, drop, dragEnd,
     showPlantInfo, updateSelectedPanel, setRowMode,
