@@ -58,7 +58,6 @@ const Store = (() => {
       heightM:          +heightM,
       cols, rows,
       cells:            {},
-      successionSlots:  [],
     };
   }
 
@@ -73,7 +72,6 @@ const Store = (() => {
       heightM:          +heightM,
       cols, rows,
       cells:            {},
-      successionSlots:  [],
     };
   }
 
@@ -89,7 +87,6 @@ const Store = (() => {
       cols:             safeCols,
       rows:             safeRows,
       cells:            {},
-      successionSlots:  [],
     };
   }
 
@@ -120,10 +117,14 @@ const Store = (() => {
     // also remove from all beds
     const beds = getBeds();
     beds.forEach(bed => {
-      Object.keys(bed.cells).forEach(k => {
-        const cell = bed.cells[k];
-        const plantId = typeof cell === 'string' ? cell : cell?.plantId;
-        if (plantId === id) delete bed.cells[k];
+      Object.entries(bed.cells || {}).forEach(([k, arr]) => {
+        if (!Array.isArray(arr)) return;
+        const filtered = arr.filter(entry => {
+          const plantId = typeof entry === 'string' ? entry : entry?.plantId;
+          return plantId !== id;
+        });
+        if (filtered.length === 0) delete bed.cells[k];
+        else if (filtered.length !== arr.length) bed.cells[k] = filtered;
       });
     });
     saveBeds(beds);
@@ -236,9 +237,8 @@ const Store = (() => {
   }
 
   // Start a new growing season.
-  // - Non-tray beds: removes all annual cells; resets perennial/infra lifecycle to 'planned'
+  // - Non-tray beds: removes all annual cell entries; resets perennial/infra lifecycle to 'planned'
   // - Tray beds: cleared entirely
-  // - successionCells cleared for all beds
   // - transplantSource back-links cleared on kept cells
   // - Current-season journal entries for removed instances are purged (batch)
   // plantLookup: (plantId) => plant object  (caller supplies PlantDB.get)
@@ -257,10 +257,13 @@ const Store = (() => {
       if (isTray) {
         // Count removed instances before clearing
         const removedIds = new Set();
-        Object.values(bed.cells || {}).forEach(cell => {
-          if (typeof cell === 'object' && cell?.origin && cell?.instanceId) {
-            removedIds.add(cell.instanceId);
-          }
+        Object.values(bed.cells || {}).forEach(arr => {
+          if (!Array.isArray(arr)) return;
+          arr.forEach(entry => {
+            if (typeof entry === 'object' && entry?.origin && entry?.instanceId) {
+              removedIds.add(entry.instanceId);
+            }
+          });
         });
         if (removedIds.size > 0) {
           removalMap.set(bed.id, removedIds);
@@ -268,41 +271,39 @@ const Store = (() => {
           bedsModified++;
         }
         bed.cells = {};
-        bed.successionSlots = [];
-        delete bed.successionCells;
         return;
       }
 
-      // Non-tray bed: two-pass
+      // Non-tray bed: keep perennials/paths/infrastructure, drop annuals.
       const removedIds = new Set();
       const newCells   = {};
 
-      Object.entries(bed.cells || {}).forEach(([key, raw]) => {
-        const isOriginLike = typeof raw === 'string' || (typeof raw === 'object' && raw?.origin);
-        const pid = typeof raw === 'string' ? raw : raw?.plantId;
-        const plant = pid ? plantLookup(pid) : null;
-        const keep  = plant && (plant.perennial || plant._isPath || plant.cat === 'infrastructure');
+      Object.entries(bed.cells || {}).forEach(([key, arr]) => {
+        if (!Array.isArray(arr)) return;
+        const kept = [];
+        arr.forEach(raw => {
+          const isOriginLike = typeof raw === 'string' || (typeof raw === 'object' && raw?.origin);
+          const pid = typeof raw === 'string' ? raw : raw?.plantId;
+          const plant = pid ? plantLookup(pid) : null;
+          const keep  = plant && (plant.perennial || plant._isPath || plant.cat === 'infrastructure');
 
-        if (keep) {
-          // Reset lifecycle to planned, clear transplant source links
-          if (typeof raw === 'object' && raw !== null) {
-            newCells[key] = {
-              ...raw,
-              lifecycle:                  'planned',
-              transplantSourceBedId:      null,
-              transplantSourceInstanceId: null,
-            };
-          } else {
-            // legacy string-format cell
-            newCells[key] = raw;
-          }
-          if (isOriginLike) keptPerennials++;
-        } else {
-          // Annual — mark for removal
-          if (typeof raw === 'object' && raw?.origin && raw?.instanceId) {
+          if (keep) {
+            if (typeof raw === 'object' && raw !== null) {
+              kept.push({
+                ...raw,
+                lifecycle:                  'planned',
+                transplantSourceBedId:      null,
+                transplantSourceInstanceId: null,
+              });
+            } else {
+              kept.push(raw);
+            }
+            if (isOriginLike) keptPerennials++;
+          } else if (typeof raw === 'object' && raw?.origin && raw?.instanceId) {
             removedIds.add(raw.instanceId);
           }
-        }
+        });
+        if (kept.length > 0) newCells[key] = kept;
       });
 
       if (removedIds.size > 0) {
@@ -312,9 +313,6 @@ const Store = (() => {
       }
 
       bed.cells = newCells;
-      // Clear all succession slots (annuals only ever live in succession)
-      bed.successionSlots = [];
-      delete bed.successionCells;
     });
 
     saveBeds(beds);
@@ -359,24 +357,31 @@ const Store = (() => {
         failed_plant: 0,
         failed: 0,
       };
-      const occupiedCells = Object.keys(bed.cells || {}).length;
+      // A cell is occupied if its array has any non-empty entry.
+      let occupiedCells = 0;
+      Object.values(bed.cells || {}).forEach(arr => {
+        if (Array.isArray(arr) && arr.length > 0) occupiedCells++;
+      });
       const totalCells = (bed.cols || 0) * (bed.rows || 0);
       const freeCells = Math.max(0, totalCells - occupiedCells);
       const areaM2 = (bed.widthM || 0) * (bed.heightM || 0);
-      Object.values(bed.cells).forEach(cell => {
-        const isOrigin = typeof cell === 'string' ? true : !!cell?.origin;
-        if (!isOrigin) return;
-        const pid = typeof cell === 'string' ? cell : cell?.plantId;
-        if (!pid) return;
-        plantCounts[pid] = (plantCounts[pid] || 0) + 1;
-        const lifecycle = typeof cell === 'string' ? 'planned' : (cell?.lifecycle || 'planned');
-        if (Object.prototype.hasOwnProperty.call(lifecycleCounts, lifecycle)) {
-          lifecycleCounts[lifecycle] += 1;
-        }
-        const plant = plantLookup(pid);
-        if (plant?.family) {
-          familyCounts[plant.family] = (familyCounts[plant.family] || 0) + 1;
-        }
+      Object.values(bed.cells || {}).forEach(arr => {
+        if (!Array.isArray(arr)) return;
+        arr.forEach(entry => {
+          const isOrigin = typeof entry === 'string' ? true : !!entry?.origin;
+          if (!isOrigin) return;
+          const pid = typeof entry === 'string' ? entry : entry?.plantId;
+          if (!pid) return;
+          plantCounts[pid] = (plantCounts[pid] || 0) + 1;
+          const lifecycle = typeof entry === 'string' ? 'planned' : (entry?.lifecycle || 'planned');
+          if (Object.prototype.hasOwnProperty.call(lifecycleCounts, lifecycle)) {
+            lifecycleCounts[lifecycle] += 1;
+          }
+          const plant = plantLookup(pid);
+          if (plant?.family) {
+            familyCounts[plant.family] = (familyCounts[plant.family] || 0) + 1;
+          }
+        });
       });
       newEntries.push({
         bedId: bed.id,

@@ -19,10 +19,13 @@ function _planHasSeeds(plantId, inventory) {
 function _planHasTraySource(plantId, beds) {
   return beds.some(b => {
     if (b.type !== 'tray') return false;
-    return Object.entries(b.cells || {}).some(([k, v]) => {
-      const c = _planNormCell(v, k);
-      return c?.origin && c?.plantId === plantId &&
-        ['tray_seeded', 'germinated', 'ready_to_transplant', 'hardened'].includes(c?.lifecycle || 'planned');
+    return Object.entries(b.cells || {}).some(([k, arr]) => {
+      if (!Array.isArray(arr)) return false;
+      return arr.some(raw => {
+        const c = _planNormCell(raw, k);
+        return c?.origin && c?.plantId === plantId &&
+          ['tray_seeded', 'germinated', 'ready_to_transplant', 'hardened'].includes(c?.lifecycle || 'planned');
+      });
     });
   });
 }
@@ -126,11 +129,11 @@ function generatePlanningTasks(beds, inventory, settings, today) {
 
   beds.forEach(bed => {
     const isTray = bed.type === 'tray';
+    const seenInstances = new Set();
 
-    [bed.cells || {}, bed.successionCells || {}].forEach(cellDict => {
-      const seenInstances = new Set();
-
-      Object.entries(cellDict).forEach(([k, raw]) => {
+    Object.entries(bed.cells || {}).forEach(([k, arr]) => {
+      if (!Array.isArray(arr)) return;
+      arr.forEach(raw => {
         const cell = _planNormCell(raw, k);
         if (!cell || !cell.origin) return;
         const { plantId, instanceId, lifecycle: lc = 'planned' } = cell;
@@ -457,14 +460,15 @@ const PlanningView = (() => {
       let fromState = 'planned';
       let found = false;
 
-      [bed.cells, bed.successionCells || {}].forEach(dict => {
-        Object.entries(dict).forEach(([k, v]) => {
-          const c = _planNormCell(v, k);
-          if (!c || !c.origin || c.instanceId !== task.instanceId) return;
+      Object.entries(bed.cells || {}).forEach(([k, arr]) => {
+        if (!Array.isArray(arr)) return;
+        for (let i = 0; i < arr.length; i++) {
+          const c = _planNormCell(arr[i], k);
+          if (!c || !c.origin || c.instanceId !== task.instanceId) continue;
           fromState = c.lifecycle || 'planned';
-          dict[k] = { ...c, lifecycle: task.nextLifecycle };
+          arr[i] = { ...c, lifecycle: task.nextLifecycle };
           found = true;
-        });
+        }
       });
 
       if (!found) return;

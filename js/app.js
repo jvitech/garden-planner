@@ -1565,10 +1565,13 @@ const CalendarView = (() => {
     const settings = Store.getSettings();
     const placed = [];
     beds.forEach(bed => {
-      Object.values(bed.cells).forEach(cell => {
-        if (!cellIsOrigin(cell)) return;
-        const pid = cellPlantId(cell);
-        if (pid) placed.push(pid);
+      Object.values(bed.cells || {}).forEach(arr => {
+        if (!Array.isArray(arr)) return;
+        arr.forEach(cell => {
+          if (!cellIsOrigin(cell)) return;
+          const pid = cellPlantId(cell);
+          if (pid) placed.push(pid);
+        });
       });
     });
     const uniquePlaced = [...new Set(placed)];
@@ -2047,26 +2050,35 @@ const StatsView = (() => {
     }
 
     scopedBeds.forEach(bed => {
-      Object.entries(bed.cells || {}).forEach(([key, rawCell]) => {
-        const cell = (typeof rawCell === 'string')
-          ? { plantId: rawCell, instanceId: key, origin: true, lifecycle: 'planned' }
-          : rawCell;
-        const context = parseCellContext(bed, cell, key);
+      Object.entries(bed.cells || {}).forEach(([key, arr]) => {
+        if (!Array.isArray(arr) || arr.length === 0) return;
+        // One coord = one occupied cell, regardless of how many plants share it.
+        const firstRaw = arr[0];
+        const firstCell = (typeof firstRaw === 'string')
+          ? { plantId: firstRaw, instanceId: key, origin: true, lifecycle: 'planned' }
+          : firstRaw;
+        const context = parseCellContext(bed, firstCell, key);
         if (!isContextInFilter(context.id, filterSet)) return;
         const row = ensureContext(context.id, context.name);
         row.occupiedCells += 1;
-        if (!cellIsOrigin(cell)) return;
-        const pid = cellPlantId(cell);
-        if (!pid || pid === '__path__') return;
-        const qty = typeof cell === 'string' ? 1 : Math.max(1, cell?.rowBlockTotal || 1);
-        const plant = PlantDB.get(pid);
-        const state = typeof cell === 'string' ? 'planned' : (cell.lifecycle || 'planned');
+        // Plant/variety stats: aggregate across all entries at this coord.
+        arr.forEach(rawCell => {
+          const cell = (typeof rawCell === 'string')
+            ? { plantId: rawCell, instanceId: key, origin: true, lifecycle: 'planned' }
+            : rawCell;
+          if (!cellIsOrigin(cell)) return;
+          const pid = cellPlantId(cell);
+          if (!pid || pid === '__path__') return;
+          const qty = typeof cell === 'string' ? 1 : Math.max(1, cell?.rowBlockTotal || 1);
+          const plant = PlantDB.get(pid);
+          const state = typeof cell === 'string' ? 'planned' : (cell.lifecycle || 'planned');
 
-        row.plants += qty;
-        row.varieties.add(pid);
-        if (plant?.family) row.families.add(plant.family);
-        if (state === 'harvested_once' || state === 'harvested_continuous') row.harvested += qty;
-        if (state === 'failed') row.failed += qty;
+          row.plants += qty;
+          row.varieties.add(pid);
+          if (plant?.family) row.families.add(plant.family);
+          if (state === 'harvested_once' || state === 'harvested_continuous') row.harvested += qty;
+          if (state === 'failed') row.failed += qty;
+        });
       });
     });
 
@@ -2206,19 +2218,22 @@ const StatsView = (() => {
 
     if (includeCurrentBaseline) {
       scopedBeds.forEach(bed => {
-        Object.entries(bed.cells || {}).forEach(([key, rawCell]) => {
-          const cell = typeof rawCell === 'string'
-            ? { plantId: rawCell, instanceId: key, origin: true, lifecycle: 'planned' }
-            : rawCell;
-          const ctx = parseCellContext(bed, cell, key);
-          if (!isContextInFilter(ctx.id, filterSet)) return;
-          if (!cellIsOrigin(cell)) return;
-          const pid = cellPlantId(cell);
-          if (!pid || pid === '__path__') return;
-          const state = typeof cell === 'string' ? 'planned' : (cell.lifecycle || 'planned');
-          const qty = typeof cell === 'string' ? 1 : Math.max(1, cell?.rowBlockTotal || 1);
-          const rec = ensure(pid);
-          if (Object.prototype.hasOwnProperty.call(rec, state)) rec[state] += qty;
+        Object.entries(bed.cells || {}).forEach(([key, arr]) => {
+          if (!Array.isArray(arr)) return;
+          arr.forEach(rawCell => {
+            const cell = typeof rawCell === 'string'
+              ? { plantId: rawCell, instanceId: key, origin: true, lifecycle: 'planned' }
+              : rawCell;
+            const ctx = parseCellContext(bed, cell, key);
+            if (!isContextInFilter(ctx.id, filterSet)) return;
+            if (!cellIsOrigin(cell)) return;
+            const pid = cellPlantId(cell);
+            if (!pid || pid === '__path__') return;
+            const state = typeof cell === 'string' ? 'planned' : (cell.lifecycle || 'planned');
+            const qty = typeof cell === 'string' ? 1 : Math.max(1, cell?.rowBlockTotal || 1);
+            const rec = ensure(pid);
+            if (Object.prototype.hasOwnProperty.call(rec, state)) rec[state] += qty;
+          });
         });
       });
     }
@@ -2894,11 +2909,14 @@ function exportTextPlan() {
     txt += `BED: ${bed.name}  (${bed.widthM}m × ${bed.heightM}m)\n`;
     txt += '-'.repeat(40) + '\n';
     const counts = {};
-    Object.values(bed.cells).forEach(cell => {
-      if (!cellIsOrigin(cell)) return;
-      const id = cellPlantId(cell);
-      if (!id) return;
-      counts[id] = (counts[id] || 0) + 1;
+    Object.values(bed.cells || {}).forEach(arr => {
+      if (!Array.isArray(arr)) return;
+      arr.forEach(cell => {
+        if (!cellIsOrigin(cell)) return;
+        const id = cellPlantId(cell);
+        if (!id) return;
+        counts[id] = (counts[id] || 0) + 1;
+      });
     });
     if (!Object.keys(counts).length) { txt += '  (empty)\n'; }
     else {
@@ -2908,7 +2926,17 @@ function exportTextPlan() {
       });
     }
     // companion warnings
-    const placed = [...new Set(Object.values(bed.cells).filter(cellIsOrigin).map(cellPlantId).filter(Boolean))];
+    const placedSet = new Set();
+    Object.values(bed.cells || {}).forEach(arr => {
+      if (!Array.isArray(arr)) return;
+      arr.forEach(cell => {
+        if (cellIsOrigin(cell)) {
+          const pid = cellPlantId(cell);
+          if (pid) placedSet.add(pid);
+        }
+      });
+    });
+    const placed = [...placedSet];
     const warns = [];
     placed.forEach(a => {
       const pa = PlantDB.get(a); if (!pa) return;

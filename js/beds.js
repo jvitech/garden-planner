@@ -333,13 +333,29 @@ const Beds = (() => {
   // O(1) cell element lookup — far faster than querySelector with attribute selectors.
   function gcellEl(bedId, r, c) { return document.getElementById(`gcell-${bedId}-${r}-${c}`); }
 
+  // Always returns the array stored at `bed.cells[key]`. Creates an empty array
+  // if absent (when `create` is true), so callers can `.push` safely.
+  function cellArrayAt(bed, key, create = false) {
+    const existing = bed.cells[key];
+    if (Array.isArray(existing)) return existing;
+    if (create) {
+      const arr = [];
+      bed.cells[key] = arr;
+      return arr;
+    }
+    return null;
+  }
+
   function countBedPlants(bed) {
     let count = 0;
-    Object.entries(bed.cells).forEach(([k, v]) => {
-      const cell = normalizeCellValue(v, k);
-      if (cell?.origin && cell.plantId !== '__path__') {
-        count += (cell.rowBlockTotal > 1 ? cell.rowBlockTotal : 1);
-      }
+    Object.values(bed.cells || {}).forEach(arr => {
+      if (!Array.isArray(arr)) return;
+      arr.forEach(raw => {
+        const cell = normalizeCellValue(raw, '0,0');
+        if (cell?.origin && cell.plantId !== '__path__') {
+          count += (cell.rowBlockTotal > 1 ? cell.rowBlockTotal : 1);
+        }
+      });
     });
     return count;
   }
@@ -359,174 +375,137 @@ const Beds = (() => {
     return getSeasonalStage(plant, selectedViewMonth) === 'dormant';
   }
 
-  // ── succession slot helpers ───────────────────────────────────
+  // ── cell-array helpers ────────────────────────────────────────
+  //
+  // `bed.cells[key]` is an array of cell entries (chain order = insertion order).
+  // There is no longer a "primary" or "succession slot" distinction at the storage
+  // level. Which entry is "active" for rendering is decided per-month from each
+  // plant's seasonal/lifecycle data plus the user's lifted choice, in the renderer.
 
-  // One-time migration: move legacy bed.successionCells → bed.successionSlots[0]
-  function migrateLegacySuccessionCells(bed) {
-    if (bed.successionCells && Object.keys(bed.successionCells).length > 0) {
-      if (!bed.successionSlots) bed.successionSlots = [];
-      if (!bed.successionSlots[0]) {
-        bed.successionSlots.unshift({ cells: bed.successionCells });
-      }
-      delete bed.successionCells;
-    } else if (!bed.successionSlots) {
-      bed.successionSlots = [];
-      delete bed.successionCells;
-    }
-  }
-
-  function getSuccessionSlots(bed) {
-    migrateLegacySuccessionCells(bed);
-    return bed.successionSlots;
-  }
-
-  // Find an origin cell for instanceId across primary cells and all succession slots.
-  // Returns { cells, key, cell, slotIndex } where slotIndex = -1 for primary.
+  // Find the origin cell for an instanceId across the whole bed.
+  // Returns { key, cell, index } or null.
   function findOriginCell(bed, instanceId) {
-    for (const [k, v] of Object.entries(bed.cells || {})) {
-      if (typeof v === 'object' && v?.instanceId === instanceId && v?.origin) {
-        return { cells: bed.cells, key: k, cell: v, slotIndex: -1 };
-      }
-    }
-    const slots = getSuccessionSlots(bed);
-    for (let si = 0; si < slots.length; si++) {
-      const slotCells = slots[si].cells || {};
-      for (const [k, v] of Object.entries(slotCells)) {
-        if (typeof v === 'object' && v?.instanceId === instanceId && v?.origin) {
-          return { cells: slotCells, key: k, cell: v, slotIndex: si };
+    for (const [k, arr] of Object.entries(bed.cells || {})) {
+      if (!Array.isArray(arr)) continue;
+      for (let i = 0; i < arr.length; i++) {
+        const c = normalizeCellValue(arr[i], k);
+        if (c?.instanceId === instanceId && c.origin) {
+          return { key: k, cell: c, index: i };
         }
       }
     }
     return null;
   }
 
-  // Determine the first slot index that is free (all cells absent/empty) for a footprint.
-  // Returns -1 if primary is not absent (place in primary).
-  // Returns 0..N for succession slot index.
-  function getTargetSlotIndex(bed, startR, startC, fp) {
-    // First verify primary is absent at these cells
-    let primaryAbsent = false;
-    for (let rr = startR; rr < startR + fp.rows && !primaryAbsent; rr++) {
-      for (let cc = startC; cc < startC + fp.cols && !primaryAbsent; cc++) {
-        const key = `${rr},${cc}`;
-        const cell = normalizeCellValue(bed.cells[key], key);
-        if (cell && isCellAbsent(cell, PlantDB.get(cell.plantId))) primaryAbsent = true;
+  // True if any cell in the proposed footprint already has at least one plant entry.
+  // Used to auto-enable seasonalMode when a placement would create a succession.
+  function footprintHasExistingPlants(bed, startR, startC, footprint) {
+    for (let rr = startR; rr < startR + footprint.rows; rr++) {
+      for (let cc = startC; cc < startC + footprint.cols; cc++) {
+        const arr = bed.cells[`${rr},${cc}`];
+        if (Array.isArray(arr) && arr.length > 0) return true;
       }
     }
-    if (!primaryAbsent) return -1;
-
-    const slots = getSuccessionSlots(bed);
-    for (let si = 0; si < slots.length; si++) {
-      const slotCells = slots[si].cells || {};
-      let slotHasActivePlant = false;
-      for (let rr = startR; rr < startR + fp.rows && !slotHasActivePlant; rr++) {
-        for (let cc = startC; cc < startC + fp.cols && !slotHasActivePlant; cc++) {
-          const key = `${rr},${cc}`;
-          const slotCell = normalizeCellValue(slotCells[key], key);
-          if (slotCell) {
-            const slotPlant = PlantDB.get(slotCell.plantId);
-            if (slotPlant && !isCellAbsent(slotCell, slotPlant)) slotHasActivePlant = true;
-          }
-        }
-      }
-      if (!slotHasActivePlant) return si; // slot is free → place here
-    }
-    return slots.length; // all slots occupied → create new slot
+    return false;
   }
 
   function canPlaceFootprint(bed, startR, startC, footprint, ignoreInstanceId = null) {
     if (startR + footprint.rows > bed.rows || startC + footprint.cols > bed.cols) return false;
-    const slots = getSuccessionSlots(bed);
     for (let rr = startR; rr < startR + footprint.rows; rr++) {
       for (let cc = startC; cc < startC + footprint.cols; cc++) {
         const key = `${rr},${cc}`;
-        const occupied = normalizeCellValue(bed.cells[key], key);
-        // Never allow placing on path cells
-        if (occupied?.plantId === '__path__') return false;
-        if (occupied && occupied.instanceId !== ignoreInstanceId) {
-          // Absent cell: allow if at least one succession slot is free at this key
-          if (isCellAbsent(occupied, PlantDB.get(occupied.plantId))) {
-            const slotIdx = getTargetSlotIndex(bed, rr, cc, { rows: 1, cols: 1 });
-            if (slotIdx >= 0) continue; // a slot is available
-          }
-          return false;
+        const arr = bed.cells[key];
+        if (!Array.isArray(arr) || arr.length === 0) continue;
+        for (const raw of arr) {
+          const occupied = normalizeCellValue(raw, key);
+          if (!occupied) continue;
+          if (occupied.plantId === '__path__') return false;          // never place over paths
+          if (occupied.instanceId === ignoreInstanceId) continue;     // ignore the moving plant
+          // Non-absent occupant blocks placement; absent occupants share the cell freely.
+          if (!isCellAbsent(occupied, PlantDB.get(occupied.plantId))) return false;
         }
       }
     }
     return true;
   }
 
-  // slotIndex: -1 = primary cells; 0+ = succession slot index
-  function placeFootprint(bed, r, c, plantId, footprint, rotation = 0, instanceId = `inst_${Date.now()}_${Math.random().toString(36).slice(2,7)}`, seedId = null, extraMeta = null, slotIndex = -1) {
-    let targetCells;
-    if (slotIndex < 0) {
-      targetCells = bed.cells;
-    } else {
-      const slots = getSuccessionSlots(bed);
-      while (slots.length <= slotIndex) slots.push({ cells: {} });
-      targetCells = slots[slotIndex].cells;
-    }
+  // Append a new plant footprint to the bed. Each cell in the footprint pushes
+  // its entry onto `bed.cells[key]` (array). No slot routing — order in the
+  // array is just the order plants were placed.
+  function placeFootprint(bed, r, c, plantId, footprint, rotation = 0, instanceId = `inst_${Date.now()}_${Math.random().toString(36).slice(2,7)}`, seedId = null, extraMeta = null) {
     for (let rr = r; rr < r + footprint.rows; rr++) {
       for (let cc = c; cc < c + footprint.cols; cc++) {
         const isOrigin = rr === r && cc === c;
         const cellVal = { plantId, instanceId, origin: isOrigin, rotation, ...(extraMeta || {}) };
         if (isOrigin) {
-          cellVal.lifecycle = 'planned';
-          cellVal.seedId = seedId || null;
+          // Caller may pass lifecycle / seedId via extraMeta when moving an existing
+          // plant; default to 'planned' for fresh placement only.
+          if (cellVal.lifecycle === undefined) cellVal.lifecycle = 'planned';
+          if (seedId !== null && seedId !== undefined) cellVal.seedId = seedId;
+          else if (cellVal.seedId === undefined) cellVal.seedId = null;
         }
-        targetCells[`${rr},${cc}`] = cellVal;
+        const key = `${rr},${cc}`;
+        const arr = cellArrayAt(bed, key, true);
+        arr.push(cellVal);
       }
     }
     return instanceId;
   }
 
+  // Remove the topmost active (non-absent) entry at (r,c). The "active" entry
+  // is the one the user clicked on / sees — same resolution the renderer uses.
   function removePlantInstance(bed, r, c) {
     const key = `${r},${c}`;
-    const slots = getSuccessionSlots(bed);
+    const arr = bed.cells[key];
+    if (!Array.isArray(arr) || arr.length === 0) return false;
 
-    // Walk the chain to find which layer is currently displayed at this cell
-    const primaryCell = normalizeCellValue(bed.cells[key], key);
-    const primaryPlant = primaryCell ? PlantDB.get(primaryCell.plantId) : null;
-    const primaryAbsent = !primaryPlant || isCellAbsent(primaryCell, primaryPlant);
-
-    if (primaryAbsent) {
-      // Find the active succession slot
-      for (let si = 0; si < slots.length; si++) {
-        const slotCells = slots[si].cells || {};
-        const slotCell = normalizeCellValue(slotCells[key], key);
-        const slotPlant = slotCell ? PlantDB.get(slotCell.plantId) : null;
-        if (slotPlant && !isCellAbsent(slotCell, slotPlant)) {
-          const sid = slotCell.instanceId;
-          Object.keys(slotCells).forEach(k => {
-            const sc = normalizeCellValue(slotCells[k], k);
-            if (sc?.instanceId === sid) delete slotCells[k];
-          });
-          if (liftedInstanceByBed.get(bed.id) === sid) liftedInstanceByBed.delete(bed.id);
-          return true;
+    // Respect the bed's lifted instance if it appears at this cell.
+    const liftedId = liftedInstanceByBed.get(bed.id) || null;
+    let target = null;
+    if (liftedId) {
+      for (const raw of arr) {
+        const c2 = normalizeCellValue(raw, key);
+        if (c2?.instanceId === liftedId && !isCellAbsent(c2, PlantDB.get(c2.plantId))) {
+          target = c2; break;
         }
       }
     }
-
-    // Remove from primary cells
-    if (!primaryCell) return false;
-    const instanceId = primaryCell.instanceId;
-    Object.entries(bed.cells).forEach(([k, v]) => {
-      const cell = normalizeCellValue(v, k);
-      if (cell?.instanceId === instanceId) {
-        delete bed.cells[k];
-        // Clean up succession slot cells that belong to THIS instance only.
-        // Without the instanceId check, a succession plant overlapping the
-        // dragged primary's coords would lose those cells when the primary moves.
-        slots.forEach(slot => {
-          const slotCell = normalizeCellValue(slot.cells[k], k);
-          if (slotCell?.instanceId === instanceId) delete slot.cells[k];
-        });
+    // Otherwise pick the first non-absent entry.
+    if (!target) {
+      for (const raw of arr) {
+        const c2 = normalizeCellValue(raw, key);
+        if (!c2) continue;
+        if (isCellAbsent(c2, PlantDB.get(c2.plantId))) continue;
+        target = c2; break;
       }
-    });
-    if (liftedInstanceByBed.get(bed.id) === instanceId) liftedInstanceByBed.delete(bed.id);
-    return true;
+    }
+    // Fallback: any entry at all (e.g. coord-driven cleanup of an absent plant).
+    if (!target) {
+      target = normalizeCellValue(arr[0], key);
+      if (!target) return false;
+    }
+    return removePlantInstanceById(bed, target.instanceId);
   }
 
+  // Remove every cell entry whose instanceId matches, across every coord in the bed.
+  function removePlantInstanceById(bed, instanceId) {
+    if (!bed || !instanceId) return false;
+    let removed = false;
+    for (const [k, arr] of Object.entries(bed.cells || {})) {
+      if (!Array.isArray(arr)) continue;
+      const filtered = arr.filter(raw => {
+        const c = normalizeCellValue(raw, k);
+        return c?.instanceId !== instanceId;
+      });
+      if (filtered.length !== arr.length) {
+        removed = true;
+        if (filtered.length === 0) delete bed.cells[k];
+        else bed.cells[k] = filtered;
+      }
+    }
+    if (liftedInstanceByBed.get(bed.id) === instanceId) liftedInstanceByBed.delete(bed.id);
+    return removed;
+  }
 
   function clearPreview() {
     previewEls.forEach(el => el.classList.remove('preview-ok', 'preview-blocked', 'preview-origin', 'preview-anchor'));
@@ -909,8 +888,12 @@ const Beds = (() => {
   function zoneOverlapsWithPaths(bed, rect) {
     for (let r = rect.minR; r <= rect.maxR; r++) {
       for (let c = rect.minC; c <= rect.maxC; c++) {
-        const cell = normalizeCellValue(bed.cells[`${r},${c}`], `${r},${c}`);
-        if (cell?.plantId === '__path__') return true;
+        const arr = bed.cells[`${r},${c}`];
+        if (!Array.isArray(arr)) continue;
+        for (const raw of arr) {
+          const cell = normalizeCellValue(raw, `${r},${c}`);
+          if (cell?.plantId === '__path__') return true;
+        }
       }
     }
     return false;
@@ -928,23 +911,28 @@ const Beds = (() => {
     pushUndo(bedId, bed);
 
     const instanceIdsToDelete = new Set();
-    Object.entries(bed.cells).forEach(([key, value]) => {
-      const cell = normalizeCellValue(value, key);
-      if (!cell) return;
+    Object.entries(bed.cells).forEach(([key, arr]) => {
+      if (!Array.isArray(arr)) return;
       const [r, c] = key.split(',').map(Number);
       if (!zoneContainsCell(zoneToDelete, r, c)) return;
-      if (cell.instanceId) instanceIdsToDelete.add(cell.instanceId);
+      for (const raw of arr) {
+        const cell = normalizeCellValue(raw, key);
+        if (cell?.instanceId) instanceIdsToDelete.add(cell.instanceId);
+      }
     });
 
-    Object.entries(bed.cells).forEach(([key, value]) => {
-      const cell = normalizeCellValue(value, key);
-      if (!cell) return;
+    Object.entries(bed.cells).forEach(([key, arr]) => {
+      if (!Array.isArray(arr)) return;
       const [r, c] = key.split(',').map(Number);
-      if (cell.instanceId && instanceIdsToDelete.has(cell.instanceId)) {
-        delete bed.cells[key];
-        return;
-      }
-      if (zoneContainsCell(zoneToDelete, r, c)) delete bed.cells[key];
+      const inZone = zoneContainsCell(zoneToDelete, r, c);
+      const filtered = arr.filter(raw => {
+        const cell = normalizeCellValue(raw, key);
+        if (cell?.instanceId && instanceIdsToDelete.has(cell.instanceId)) return false;
+        if (inZone) return false;
+        return true;
+      });
+      if (filtered.length === 0) delete bed.cells[key];
+      else if (filtered.length !== arr.length) bed.cells[key] = filtered;
     });
 
     const updated = layout.filter((_, i) => i !== zoneIdx);
@@ -1137,8 +1125,10 @@ const Beds = (() => {
     const rowBatchId = `row_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
 
     const context = bedContextForCell(bed, rect.minR, rect.minC, contextZone);
-    const rowSlotIndex = getTargetSlotIndex(bed, rect.minR, rect.minC, blockFp);
-    if (rowSlotIndex >= 0 && !armedSeasonalMode) {
+    // Auto-enable seasonalMode when the user is placing onto a coord that already
+    // has plants — that's how succession is now expressed (same coord, multiple
+    // plants in the array, each with its own dates).
+    if (footprintHasExistingPlants(bed, rect.minR, rect.minC, blockFp) && !armedSeasonalMode) {
       armedSeasonalMode = true;
       const cb = document.getElementById('armed-seasonal-mode-cb') || document.querySelector('[onchange*="setArmedSeasonalMode"]');
       if (cb) cb.checked = true;
@@ -1166,7 +1156,6 @@ const Beds = (() => {
         plotZoneId: context.plotZoneId,
         seasonalMode: armedSeasonalMode || undefined,
       },
-      rowSlotIndex
     );
 
     if (selectedPlantId !== '__path__') {
@@ -1263,10 +1252,14 @@ const Beds = (() => {
     for (let r = minR; r <= maxR; r++) {
       for (let c = minC; c <= maxC; c++) {
         const key = `${r},${c}`;
-        const cell = normalizeCellValue(bed.cells[key], key);
-        if (cell?.plantId && cell?.instanceId) {
-          const iKey = `${bedId}::${cell.instanceId}`;
-          found.set(iKey, { bedId, instanceId: cell.instanceId });
+        const arr = bed.cells[key];
+        if (!Array.isArray(arr)) continue;
+        for (const raw of arr) {
+          const cell = normalizeCellValue(raw, key);
+          if (cell?.plantId && cell?.instanceId) {
+            const iKey = `${bedId}::${cell.instanceId}`;
+            found.set(iKey, { bedId, instanceId: cell.instanceId });
+          }
         }
       }
     }
@@ -1720,23 +1713,26 @@ const Beds = (() => {
     if (!bed) return;
 
     let changed = false;
-    Object.entries(bed.cells).forEach(([k, v]) => {
-      const cell = normalizeCellValue(v, k);
-      if (!cell || cell.instanceId !== instanceId || cell.plantId !== '__path__') return;
-      const next = { ...cell };
-      if (field === 'color') {
-        const nextColor = value || '#c8a882';
-        next.pathColor = nextColor;
-        pathConfig.color = nextColor;
-      } else if (field === 'desc') {
-        const nextDesc = String(value || '').slice(0, 80);
-        next.pathDesc = nextDesc || null;
-        pathConfig.desc = nextDesc;
-      } else {
-        return;
+    Object.entries(bed.cells).forEach(([k, arr]) => {
+      if (!Array.isArray(arr)) return;
+      for (let i = 0; i < arr.length; i++) {
+        const cell = normalizeCellValue(arr[i], k);
+        if (!cell || cell.instanceId !== instanceId || cell.plantId !== '__path__') continue;
+        const next = { ...cell };
+        if (field === 'color') {
+          const nextColor = value || '#c8a882';
+          next.pathColor = nextColor;
+          pathConfig.color = nextColor;
+        } else if (field === 'desc') {
+          const nextDesc = String(value || '').slice(0, 80);
+          next.pathDesc = nextDesc || null;
+          pathConfig.desc = nextDesc;
+        } else {
+          continue;
+        }
+        arr[i] = next;
+        changed = true;
       }
-      bed.cells[k] = next;
-      changed = true;
     });
 
     if (!changed) return;
@@ -1774,8 +1770,8 @@ const Beds = (() => {
       pill.title = 'Exit placement mode';
     } else if (lastClickedInstance) {
       const bed = Store.getBeds().find(b => b.id === lastClickedInstance.bedId);
-      const origin = bed ? Object.values(bed.cells).find(v => v?.instanceId === lastClickedInstance.instanceId && v?.origin) : null;
-      const p = origin ? PlantDB.get(origin.plantId) : null;
+      const origin = bed ? findOriginCell(bed, lastClickedInstance.instanceId) : null;
+      const p = origin?.cell ? PlantDB.get(origin.cell.plantId) : null;
       pill.className = 'mode-pill selected';
       pill.textContent = p ? `${p.emoji} ${p.name}` : '🌱 Plant selected';
       pill.title = 'Click to deselect';
@@ -1873,9 +1869,11 @@ const Beds = (() => {
     const effectiveZone = bedIsTray ? null : (zone || (plotLayoutForBed(bed).find(item => zoneContainsFootprint(item, plan.origin.startR, plan.origin.startC, plan.fp)) || null));
     const context = bedContextForCell(bed, plan.origin.startR, plan.origin.startC, effectiveZone);
     const pathMeta = isPath ? { pathColor: pathConfig.color || null, pathDesc: pathConfig.desc || null, blockRows: plan.fp.rows, blockCols: plan.fp.cols } : {};
-    const slotIndex = !isPath ? getTargetSlotIndex(bed, plan.origin.startR, plan.origin.startC, plan.fp) : -1;
-    // Succession plants must always carry seasonalMode so they hide at the right time
-    if (slotIndex >= 0 && !armedSeasonalMode) {
+    // Auto-enable seasonalMode when planting onto a coord that already has plants
+    // — that's the new "succession" signal (same coord, multiple plants in the array).
+    if (!isPath
+        && footprintHasExistingPlants(bed, plan.origin.startR, plan.origin.startC, plan.fp)
+        && !armedSeasonalMode) {
       armedSeasonalMode = true;
       const cb = document.getElementById('armed-seasonal-mode-cb') || document.querySelector('[onchange*="setArmedSeasonalMode"]');
       if (cb) cb.checked = true;
@@ -1895,8 +1893,7 @@ const Beds = (() => {
         plotZoneId: context.plotZoneId,
         seasonalMode: (!isPath && armedSeasonalMode) || undefined,
         ...pathMeta,
-      },
-      slotIndex
+      }
     );
 
     if (selectedPlantId !== '__path__') {
@@ -2177,25 +2174,30 @@ const Beds = (() => {
     const mapped = plotLayoutForBed(bed);
     const activeZone = activePlotZoneForBed(bed.id);
 
+    // Single flat instanceMeta map covering every plant in the bed, no matter
+    // where in the chain it sits at any cell. One walk over all entries.
     const instanceMeta = {};
-    Object.entries(bed.cells).forEach(([key, val]) => {
-      const cell = normalizeCellValue(val, key);
-      if (!cell) return;
+    Object.entries(bed.cells || {}).forEach(([key, arr]) => {
+      if (!Array.isArray(arr)) return;
       const [r, c] = key.split(',').map(Number);
-      const existing = instanceMeta[cell.instanceId] || {
-        minR: r, maxR: r, minC: c, maxC: c,
-        seedId: null,
-        lifecycle: 'planned',
-        seasonalMode: false,
-      };
-      existing.minR = Math.min(existing.minR, r);
-      existing.maxR = Math.max(existing.maxR, r);
-      existing.minC = Math.min(existing.minC, c);
-      existing.maxC = Math.max(existing.maxC, c);
-      if (cell.origin) existing.seedId = cell.seedId || null;
-      if (cell.origin) existing.lifecycle = cell.lifecycle || 'planned';
-      if (cell.origin) existing.seasonalMode = cell.seasonalMode || false;
-      instanceMeta[cell.instanceId] = existing;
+      arr.forEach(raw => {
+        const cell = normalizeCellValue(raw, key);
+        if (!cell) return;
+        const existing = instanceMeta[cell.instanceId] || {
+          minR: r, maxR: r, minC: c, maxC: c,
+          seedId: null,
+          lifecycle: 'planned',
+          seasonalMode: false,
+        };
+        existing.minR = Math.min(existing.minR, r);
+        existing.maxR = Math.max(existing.maxR, r);
+        existing.minC = Math.min(existing.minC, c);
+        existing.maxC = Math.max(existing.maxC, c);
+        if (cell.origin) existing.seedId = cell.seedId || null;
+        if (cell.origin) existing.lifecycle = cell.lifecycle || 'planned';
+        if (cell.origin) existing.seasonalMode = cell.seasonalMode || false;
+        instanceMeta[cell.instanceId] = existing;
+      });
     });
 
     Object.values(instanceMeta).forEach(meta => {
@@ -2203,35 +2205,6 @@ const Beds = (() => {
       meta.imageSources = seedImageSources(seed);
       meta.cols = (meta.maxC - meta.minC) + 1;
       meta.rows = (meta.maxR - meta.minR) + 1;
-    });
-
-    // Succession slots — one instanceMeta dict per slot
-    const slotsInstanceMeta = getSuccessionSlots(bed).map(slot => {
-      const slotMeta = {};
-      Object.entries(slot.cells || {}).forEach(([key, val]) => {
-        const cell = normalizeCellValue(val, key);
-        if (!cell) return;
-        const [r, c] = key.split(',').map(Number);
-        const existing = slotMeta[cell.instanceId] || {
-          minR: r, maxR: r, minC: c, maxC: c,
-          seedId: null, lifecycle: 'planned', seasonalMode: false,
-        };
-        existing.minR = Math.min(existing.minR, r);
-        existing.maxR = Math.max(existing.maxR, r);
-        existing.minC = Math.min(existing.minC, c);
-        existing.maxC = Math.max(existing.maxC, c);
-        if (cell.origin) existing.seedId    = cell.seedId    || null;
-        if (cell.origin) existing.lifecycle = cell.lifecycle || 'planned';
-        if (cell.origin) existing.seasonalMode = cell.seasonalMode || false;
-        slotMeta[cell.instanceId] = existing;
-      });
-      Object.values(slotMeta).forEach(m => {
-        const seed = m.seedId ? invById.get(m.seedId) : null;
-        m.imageSources = seedImageSources(seed);
-        m.cols = (m.maxC - m.minC) + 1;
-        m.rows = (m.maxR - m.minR) + 1;
-      });
-      return slotMeta;
     });
 
     // col labels
@@ -2253,21 +2226,19 @@ const Beds = (() => {
         <div class="bed-row-lbl${meterRow ? ' meter' : ''}">${isTray ? (r + 1) : (meterRow ? `${Math.round((r + 1) * CELL_M)}m` : '')}</div>`;
       for (let c = 0; c < cols; c++) {
         const key    = `${r},${c}`;
-        const cell   = normalizeCellValue(bed.cells[key], key);
-        const plant  = cell ? PlantDB.get(cell.plantId) : null;
+        // Per-cell storage is now an array of entries (no more primary/succession split).
+        // The "first entry" provides the legacy primary-style variables used below for
+        // seasonal classes and the absent-ghost emoji; the renderer still walks the
+        // whole array to assemble the chain.
+        const cellArr = Array.isArray(bed.cells[key]) ? bed.cells[key] : [];
+        const cell    = cellArr.length > 0 ? normalizeCellValue(cellArr[0], key) : null;
+        const plant   = cell ? PlantDB.get(cell.plantId) : null;
         const isOrigin = !!cell?.origin;
         const meta   = cell ? instanceMeta[cell.instanceId] : null;
         const hasSeedImage = false;
-        const isPerimeterCell = !!(meta && (r === meta.minR || r === meta.maxR || c === meta.minC || c === meta.maxC));
-        const occ    = plant ? ' occupied' : '';
-        const catCls = plant ? ` cat-${plant._isPath ? 'path' : (plant.cat || 'other')}` : '';
-        const rg = plant && !plant._isPath ? rotationGroup(plant) : null;
-        const rotCls = rg ? ` rot-${rg.key}` : '';
         const lifecycle = meta?.lifecycle || cell?.lifecycle || 'planned';
-        const lcMeta = LC_META[lifecycle] || LC_META.planned;
         const isMultiCellPlant = !!(meta && (meta.rows > 1 || meta.cols > 1));
         const showLifecycleStrip = !isMultiCellPlant || (!!meta && r === meta.maxR);
-        const showDeleteButton = !!(plant && meta && r === meta.minR && c === meta.maxC);
 
         // ── Seasonal stage overlay ────────────────────────────────
         let seasonalMeta = null;
@@ -2291,39 +2262,27 @@ const Beds = (() => {
         }
 
         // ── Active chain: collect every plant at this cell that is currently in-season ─
-        // Primary is always considered first; then each succession slot in order.
-        // `isCellAbsent` already encodes both terminal-lifecycle and seasonal-month logic,
-        // so the date-based filtering the user described comes for free.
+        // Walk every entry in the cell's array (order = chain order, oldest first).
+        // `isCellAbsent` filters terminal-state and out-of-season plants, so the chain
+        // is just "all plants the user sees at this cell right now".
         const isTerminalAbsence = cell && TERMINAL_STATES.has(lifecycle);
         const chainAtCell = [];
-        if (cell && plant && !isAbsentCell) {
-          chainAtCell.push({ slotIndex: -1, cell, plant, meta, lifecycle, isOrigin });
-        }
-        // Walk succession slots whenever the primary is absent/empty OR when a month
-        // is selected (so concurrent overlaps surface as a stack). Outside month view
-        // we still need terminal succession (primary harvested → succession takes over),
-        // which is covered by the `!primaryActive` clause.
-        const primaryActive = !!(cell && plant && !isAbsentCell);
-        if (selectedViewMonth !== null || !primaryActive) {
-          const slots = getSuccessionSlots(bed);
-          for (let si = 0; si < slots.length; si++) {
-            const slotRaw = (slots[si].cells || {})[key];
-            if (!slotRaw) continue;
-            const slotCell = normalizeCellValue(slotRaw, key);
-            const slotPlant = slotCell ? PlantDB.get(slotCell.plantId) : null;
-            if (!slotPlant) continue;
-            const slotMeta = slotsInstanceMeta[si]?.[slotCell.instanceId] || null;
-            const slotLc   = slotMeta?.lifecycle;
-            if (isCellAbsent(slotCell, slotPlant, slotLc)) continue;
-            chainAtCell.push({
-              slotIndex: si,
-              cell: slotCell,
-              plant: slotPlant,
-              meta: slotMeta,
-              lifecycle: slotLc,
-              isOrigin: !!slotCell.origin,
-            });
-          }
+        for (let i = 0; i < cellArr.length; i++) {
+          const c2 = normalizeCellValue(cellArr[i], key);
+          if (!c2) continue;
+          const p2 = PlantDB.get(c2.plantId);
+          if (!p2) continue;
+          const m2 = instanceMeta[c2.instanceId] || null;
+          const lc2 = m2?.lifecycle ?? c2.lifecycle ?? 'planned';
+          if (isCellAbsent(c2, p2, lc2)) continue;
+          chainAtCell.push({
+            index: i,
+            cell: c2,
+            plant: p2,
+            meta: m2,
+            lifecycle: lc2,
+            isOrigin: !!c2.origin,
+          });
         }
 
         // Pick the active chain entry: the user-lifted one if it exists at this cell,
@@ -2341,10 +2300,6 @@ const Beds = (() => {
         const displayLifecycle = activeEntry ? (activeEntry.lifecycle || 'planned') : lifecycle;
         const displayRg        = displayPlant && !displayPlant._isPath ? rotationGroup(displayPlant) : null;
         const displayIsPerimeterCell = !!(displayMeta && (r === displayMeta.minR || r === displayMeta.maxR || c === displayMeta.minC || c === displayMeta.maxC));
-
-        // Whether the active plant is a succession (non-primary) entry. Drag is only
-        // available for the primary because dragStart reads bed.cells directly.
-        const activeIsSuccession = !!(activeEntry && activeEntry.slotIndex >= 0);
 
         // Build the chain-label stack — only when more than one plant in the chain
         // shares this cell origin. Each label is clickable; clicking a non-active
@@ -2388,7 +2343,7 @@ const Beds = (() => {
         const pathBg = displayPlant?._isPath ? (displayCell?.pathColor || '#c8a882') : null;
         const seasonalBg = (seasonalMeta && !pathBg && !isAbsentCell) ? `;background:${seasonalMeta.color}` : '';
         const pathColorStyle = pathBg ? `;background:${pathBg};border-color:${pathBg}` : '';
-        const dragAttrs = (!activeIsSuccession && displayPlant && displayIsOrigin && !displayPlant?._isPath)
+        const dragAttrs = (displayPlant && displayIsOrigin && !displayPlant?._isPath)
           ? `draggable="true" ondragstart="Beds.dragStart(event,'${bed.id}',${r},${c})" ondragend="Beds.dragEnd()"`
           : '';
         const displayInstanceId = displayCell?.instanceId || '';
@@ -2647,29 +2602,36 @@ const Beds = (() => {
       clearInstanceFocus();
       placeArmedPlantAt(bedId, r, c);
     } else {
-      // show info panel for occupied cell — walk succession chain
+      // Show info panel for occupied cell — pick the topmost non-absent entry
+      // from the cell's array. If everything is absent, fall back to the first
+      // entry so the user still sees what was planted there.
       const key = `${r},${c}`;
-      const primaryCell = normalizeCellValue(bed.cells[key], key);
-      const primaryPlant = primaryCell ? PlantDB.get(primaryCell.plantId) : null;
-      // Resolve lifecycle via origin cell to handle non-origin cells of multi-cell plants
-      const primaryOriginResult = primaryCell?.instanceId ? findOriginCell(bed, primaryCell.instanceId) : null;
-      const primaryResolvedLifecycle = primaryOriginResult?.cell?.lifecycle || primaryCell?.lifecycle;
-      const primaryAbsent = !!(primaryCell && primaryPlant && isCellAbsent(primaryCell, primaryPlant, primaryResolvedLifecycle));
-      let cell = primaryAbsent ? null : primaryCell;
-      if (primaryAbsent) {
-        const slots = getSuccessionSlots(bed);
-        for (let si = 0; si < slots.length; si++) {
-          const slotRaw = (slots[si].cells || {})[key];
-          if (!slotRaw) continue;
-          const slotCell = normalizeCellValue(slotRaw, key);
-          const slotPlant = slotCell ? PlantDB.get(slotCell.plantId) : null;
-          if (!slotPlant) continue;
-          const slotOriginResult = slotCell?.instanceId ? findOriginCell(bed, slotCell.instanceId) : null;
-          const slotResolvedLifecycle = slotOriginResult?.cell?.lifecycle || slotCell?.lifecycle;
-          if (!isCellAbsent(slotCell, slotPlant, slotResolvedLifecycle)) { cell = slotCell; break; }
+      const arr = Array.isArray(bed.cells[key]) ? bed.cells[key] : [];
+      let cell = null;
+      const liftedId = liftedInstanceByBed.get(bedId) || null;
+      if (liftedId) {
+        for (const raw of arr) {
+          const c2 = normalizeCellValue(raw, key);
+          if (c2?.instanceId === liftedId) {
+            const p2 = PlantDB.get(c2.plantId);
+            const orig = c2.instanceId ? findOriginCell(bed, c2.instanceId) : null;
+            const lc = orig?.cell?.lifecycle || c2.lifecycle;
+            if (!isCellAbsent(c2, p2, lc)) { cell = c2; break; }
+          }
         }
-        if (!cell) cell = primaryCell; // no active succession — still show primary info
       }
+      if (!cell) {
+        for (const raw of arr) {
+          const c2 = normalizeCellValue(raw, key);
+          if (!c2) continue;
+          const p2 = PlantDB.get(c2.plantId);
+          if (!p2) continue;
+          const orig = findOriginCell(bed, c2.instanceId);
+          const lc = orig?.cell?.lifecycle || c2.lifecycle;
+          if (!isCellAbsent(c2, p2, lc)) { cell = c2; break; }
+        }
+      }
+      if (!cell && arr.length > 0) cell = normalizeCellValue(arr[0], key); // no active — show first
       const pid = cell?.plantId;
       if (pid) {
         const target = { bedId, instanceId: cell.instanceId };
@@ -2735,32 +2697,59 @@ const Beds = (() => {
       return;
     }
     const bed = Store.getBeds().find(b => b.id === bedId);
-    const cell = bed ? normalizeCellValue(bed.cells[`${r},${c}`], `${r},${c}`) : null;
-    if (!bed || !cell?.origin) {
+    if (!bed) {
       event.preventDefault();
       return;
     }
+    const key = `${r},${c}`;
+
+    // Build the chain at (r,c) from the per-cell array, matching the renderer's
+    // filter so the dragged instance is exactly the plant the user sees.
+    const arr = Array.isArray(bed.cells[key]) ? bed.cells[key] : [];
+    const chain = [];
+    for (const raw of arr) {
+      const c2 = normalizeCellValue(raw, key);
+      if (!c2) continue;
+      const p2 = PlantDB.get(c2.plantId);
+      if (!p2 || isCellAbsent(c2, p2)) continue;
+      chain.push({ cell: c2 });
+    }
+
+    const liftedId = liftedInstanceByBed.get(bedId) || null;
+    const liftedEntry = liftedId ? chain.find(e => e.cell?.instanceId === liftedId) : null;
+    const active = liftedEntry || chain[0] || null;
+    if (!active?.cell?.origin) {
+      event.preventDefault();
+      return;
+    }
+
+    const src = active.cell;
     dragState = {
       sourceBedId: bedId,
       sourceR: r,
       sourceC: c,
-      instanceId: cell.instanceId,
-      plantId: cell.plantId,
-      rotation: cell.rotation || 0,
-      seedId: cell.seedId || null,
-      blockRows: cell.blockRows || 0,
-      blockCols: cell.blockCols || 0,
-      pathColor: cell.pathColor || null,
-      pathDesc: cell.pathDesc || null,
-      rowBatchId: cell.rowBatchId || null,
-      rowBatchTotal: cell.rowBatchTotal || 0,
-      rowBlockMode: !!cell.rowBlockMode,
-      rowBlockRows: cell.rowBlockRows || 0,
-      rowBlockPerRow: cell.rowBlockPerRow || 0,
-      rowBlockTotal: cell.rowBlockTotal || 0,
+      instanceId: src.instanceId,
+      plantId: src.plantId,
+      rotation: src.rotation || 0,
+      seedId: src.seedId || null,
+      blockRows: src.blockRows || 0,
+      blockCols: src.blockCols || 0,
+      pathColor: src.pathColor || null,
+      pathDesc: src.pathDesc || null,
+      rowBatchId: src.rowBatchId || null,
+      rowBatchTotal: src.rowBatchTotal || 0,
+      rowBlockMode: !!src.rowBlockMode,
+      rowBlockRows: src.rowBlockRows || 0,
+      rowBlockPerRow: src.rowBlockPerRow || 0,
+      rowBlockTotal: src.rowBlockTotal || 0,
+      // Preserve per-instance state so it survives the move.
+      lifecycle: src.lifecycle || 'planned',
+      seasonalMode: !!src.seasonalMode,
+      transplantSourceBedId: src.transplantSourceBedId || null,
+      transplantSourceInstanceId: src.transplantSourceInstanceId || null,
     };
     event.dataTransfer.effectAllowed = 'move';
-    event.dataTransfer.setData('text/plain', cell.instanceId);
+    event.dataTransfer.setData('text/plain', src.instanceId);
     event.target.closest('.gcell')?.classList.add('drag-source');
     clearPreview();
   }
@@ -2811,7 +2800,9 @@ const Beds = (() => {
 
     pushUndo(sourceBed.id, sourceBed);
     if (targetBed.id !== sourceBed.id) pushUndo(targetBed.id, targetBed);
-    removePlantInstance(sourceBed, dragState.sourceR, dragState.sourceC);
+    // Remove by the exact instanceId captured at dragStart — works for both
+    // primary cells and any succession slot the dragged plant came from.
+    removePlantInstanceById(sourceBed, dragState.instanceId);
     placeFootprint(
       targetBed,
       plan.origin.startR,
@@ -2832,6 +2823,11 @@ const Beds = (() => {
         rowBlockRows: dragState.rowBlockRows || 0,
         rowBlockPerRow: dragState.rowBlockPerRow || 0,
         rowBlockTotal: dragState.rowBlockTotal || 0,
+        // Carry the source state forward so the moved plant keeps its identity.
+        lifecycle: dragState.lifecycle || 'planned',
+        seasonalMode: dragState.seasonalMode || undefined,
+        transplantSourceBedId: dragState.transplantSourceBedId || null,
+        transplantSourceInstanceId: dragState.transplantSourceInstanceId || null,
       }
     );
     Store.updateBed(sourceBed);
@@ -2861,12 +2857,29 @@ const Beds = (() => {
     const bed  = beds.find(b => b.id === bedId);
     if (!bed) return;
     const key = `${r},${c}`;
-    // Prefer succession target when the primary cell is absent (succession plant is what's rendered)
-    const succTarget = bed.successionCells ? normalizeCellValue(bed.successionCells[key], key) : null;
-    const target = succTarget || normalizeCellValue(bed.cells[key], key);
+    // Resolve the instance that the ✕ button removes: pick the topmost non-absent
+    // entry from this cell (matches what the user sees), respecting any lifted choice.
+    const arr = Array.isArray(bed.cells[key]) ? bed.cells[key] : [];
+    let target = null;
+    const liftedId = liftedInstanceByBed.get(bedId) || null;
+    if (liftedId) {
+      for (const raw of arr) {
+        const cell = normalizeCellValue(raw, key);
+        if (cell?.instanceId === liftedId) { target = cell; break; }
+      }
+    }
+    if (!target) {
+      for (const raw of arr) {
+        const cell = normalizeCellValue(raw, key);
+        if (!cell) continue;
+        if (isCellAbsent(cell, PlantDB.get(cell.plantId))) continue;
+        target = cell; break;
+      }
+    }
+    if (!target && arr.length > 0) target = normalizeCellValue(arr[0], key);
     if (!target) return;
     pushUndo(bedId, bed);
-    removePlantInstance(bed, r, c);
+    removePlantInstanceById(bed, target.instanceId);
     Store.removeCurrentSeasonEventsForInstance(target.instanceId, bedId);
     selectedLifecycleInstances = selectedLifecycleInstances.filter(t => !(t.bedId === bedId && t.instanceId === target.instanceId));
     if (selectedLifecycleInstances.length) {
@@ -2896,19 +2909,10 @@ const Beds = (() => {
     targets.forEach(({ bedId, instanceId }) => {
       const bed = beds.find(b => b.id === bedId);
       if (!bed) return;
-      // Find an origin cell for this instance to get row/col
-      const entry = Object.entries(bed.cells).find(([, v]) => {
-        const c = normalizeCellValue(v, '');
-        return c?.instanceId === instanceId && c?.origin;
-      }) || Object.entries(bed.successionCells || {}).find(([, v]) => {
-        const c = normalizeCellValue(v, '');
-        return c?.instanceId === instanceId && c?.origin;
-      });
-      if (!entry) return;
-      const [key] = entry;
-      const [r, c] = key.split(',').map(Number);
+      const origin = findOriginCell(bed, instanceId);
+      if (!origin) return;
       pushUndo(bedId, bed);
-      removePlantInstance(bed, r, c);
+      removePlantInstanceById(bed, instanceId);
       Store.removeCurrentSeasonEventsForInstance(instanceId, bedId);
       touchedIds.add(bedId);
     });
@@ -2979,19 +2983,22 @@ const Beds = (() => {
     }
 
     const key = `${r},${c}`;
-    const base = normalizeCellValue(bed.cells[key], key);
-    const pid = base?.plantId;
-    if (!pid) return;
-    const plant = PlantDB.get(pid);
-    if (!plant) return;
-
-    // Also check succession layer
-    const succRawHover = (bed.successionCells || {})[key];
-    const succHoverCell = succRawHover ? normalizeCellValue(succRawHover, key) : null;
-    const hoverPlant = succHoverCell && isCellAbsent(base, plant)
-      ? (PlantDB.get(succHoverCell.plantId) || plant)
-      : plant;
-    const hoverCell = (succHoverCell && isCellAbsent(base, plant)) ? succHoverCell : base;
+    // Pick the topmost non-absent entry at this cell for hover (matches render).
+    const arr = Array.isArray(bed.cells[key]) ? bed.cells[key] : [];
+    let hoverCell = null;
+    let hoverPlant = null;
+    for (const raw of arr) {
+      const c2 = normalizeCellValue(raw, key);
+      if (!c2) continue;
+      const p2 = PlantDB.get(c2.plantId);
+      if (!p2) continue;
+      if (!isCellAbsent(c2, p2)) { hoverCell = c2; hoverPlant = p2; break; }
+    }
+    if (!hoverCell && arr.length > 0) {
+      hoverCell = normalizeCellValue(arr[0], key);
+      hoverPlant = hoverCell ? PlantDB.get(hoverCell.plantId) : null;
+    }
+    if (!hoverCell || !hoverPlant) return;
 
     hoverInstanceCells(bedId, hoverCell.instanceId);
 
@@ -3062,9 +3069,8 @@ const Beds = (() => {
     if (p._isPath) {
       const hasSelectedPathInstance = !!(instanceId && bedId);
       const bed = hasSelectedPathInstance ? Store.getBeds().find(b => b.id === bedId) : null;
-      const origin = (bed && hasSelectedPathInstance)
-        ? Object.values(bed.cells).find(v => v?.instanceId === instanceId && v?.origin)
-        : null;
+      const originResult = (bed && hasSelectedPathInstance) ? findOriginCell(bed, instanceId) : null;
+      const origin = originResult?.cell || null;
       const currentColor = origin?.pathColor || pathConfig.color || '#c8a882';
       const currentDesc = origin?.pathDesc || pathConfig.desc || '';
       const colorHandler = hasSelectedPathInstance
@@ -3287,7 +3293,8 @@ const Beds = (() => {
     if (instanceId && bedId) {
       const bed = Store.getBeds().find(b => b.id === bedId);
       if (bed) {
-        const origin = Object.values(bed.cells).find(v => v?.instanceId === instanceId && v?.origin);
+        const originResult = findOriginCell(bed, instanceId);
+        const origin = originResult?.cell;
         if (origin?.seedId) {
           const seed = Store.getInventory().find(s => s.id === origin.seedId);
           if (seed) {
@@ -3331,11 +3338,8 @@ const Beds = (() => {
         let seasonalOn = p.perennial; // perennial is always on
         if (!p.perennial && instanceId && bedId) {
           const bed = Store.getBeds().find(b => b.id === bedId);
-          const origin = bed
-            ? (Object.values(bed.cells).find(v => v?.instanceId === instanceId && v?.origin)
-               || Object.values(bed.successionCells || {}).find(v => v?.instanceId === instanceId && v?.origin))
-            : null;
-          seasonalOn = !!(origin?.seasonalMode);
+          const origin = bed ? findOriginCell(bed, instanceId) : null;
+          seasonalOn = !!(origin?.cell?.seasonalMode);
         } else if (!p.perennial && !instanceId) {
           // Armed plant preview — reflect current armed state
           seasonalOn = armedSeasonalMode;
@@ -3507,42 +3511,41 @@ const Beds = (() => {
     targets.forEach(({ bedId, instanceId }) => {
       const bed = beds.find(b => b.id === bedId);
       if (!bed) return;
-      
-      // Validate: check if all instances share the same plant
-      const origin = Object.values(bed.cells).find(v => v?.instanceId === instanceId && v?.origin);
+
+      const origin = findOriginCell(bed, instanceId);
       if (!origin) return;
-      
-      const plant = PlantDB.get(origin.plantId);
+      const plant = PlantDB.get(origin.cell.plantId);
       if (!plant) return;
-      
+
       // Validate seed packet is compatible with plant
       if (seedId) {
         const seed = Store.getInventory().find(s => s.id === seedId);
-        if (!seed || seed.plantId !== plant.id) {
-          // Skip incompatible packet
-          return;
-        }
+        if (!seed || seed.plantId !== plant.id) return;
       }
-      
-      // Apply seed to all cells of this instance
-      Object.entries(bed.cells).forEach(([k, v]) => {
-        if (typeof v === 'object' && v?.instanceId === instanceId && v?.origin) {
-          bed.cells[k] = { ...v, seedId: seedId || null };
+
+      // Apply seed to the origin entry of this instance.
+      Object.entries(bed.cells).forEach(([k, arr]) => {
+        if (!Array.isArray(arr)) return;
+        for (let i = 0; i < arr.length; i++) {
+          const c = normalizeCellValue(arr[i], k);
+          if (c?.instanceId === instanceId && c?.origin) {
+            arr[i] = { ...c, seedId: seedId || null };
+          }
         }
       });
-      
+
       updateCount++;
       Store.updateBed(bed);
     });
-    
+
     // Update display (show last clicked instance if available)
     if (lastClickedInstance) {
       const bed = beds.find(b => b.id === lastClickedInstance.bedId);
       if (bed) {
-        const origin = Object.values(bed.cells).find(v => v?.instanceId === lastClickedInstance.instanceId && v?.origin);
-        if (origin) {
-          const plant = PlantDB.get(origin.plantId);
-          showPlantInfo(plant, origin.rotation || 0, lastClickedInstance.instanceId, lastClickedInstance.bedId);
+        const origin = findOriginCell(bed, lastClickedInstance.instanceId);
+        if (origin?.cell) {
+          const plant = PlantDB.get(origin.cell.plantId);
+          showPlantInfo(plant, origin.cell.rotation || 0, lastClickedInstance.instanceId, lastClickedInstance.bedId);
         }
       }
     }
@@ -3560,8 +3563,8 @@ const Beds = (() => {
     const plantId = lastClickedInstance
       ? (() => {
           const bed = Store.getBeds().find(b => b.id === lastClickedInstance.bedId);
-          const origin = bed ? Object.values(bed.cells).find(v => v?.instanceId === lastClickedInstance.instanceId && v?.origin) : null;
-          return origin?.plantId || selectedPlantId;
+          const origin = bed ? findOriginCell(bed, lastClickedInstance.instanceId) : null;
+          return origin?.cell?.plantId || selectedPlantId;
         })()
       : selectedPlantId;
     if (!plantId) return;
@@ -4030,15 +4033,11 @@ const Beds = (() => {
     }
     const bed = Store.getBeds().find(b => b.id === (event.bedId || activeBedId));
     if (bed) {
-      const originEntry = Object.entries(bed.cells).find(([k, v]) => {
-        const cell = normalizeCellValue(v, k);
-        return cell?.origin && cell.instanceId === event.instanceId;
-      });
+      const originResult = findOriginCell(bed, event.instanceId);
 
-      if (originEntry) {
-        const [k, v] = originEntry;
-        const [r, c] = k.split(',').map(Number);
-        const cell = normalizeCellValue(v, k);
+      if (originResult?.cell) {
+        const [r, c] = originResult.key.split(',').map(Number);
+        const cell = originResult.cell;
         const plant = PlantDB.get(cell.plantId);
         if (plant) {
           lastClickedInstance = { bedId: bed.id, instanceId: cell.instanceId };
@@ -4315,13 +4314,17 @@ const Beds = (() => {
     const vars  = new Set();
     let occupied = 0;
     beds.forEach(bed => {
-      occupied += Object.keys(bed.cells).length;
-      Object.entries(bed.cells).forEach(([k, v]) => {
-        const cell = normalizeCellValue(v, k);
-        if (cell?.origin && cell.plantId !== '__path__') {
-          total += (cell.rowBlockTotal > 1 ? cell.rowBlockTotal : 1);
-          vars.add(cell.plantId);
-        }
+      // A cell is "occupied" if any entry in its array is present.
+      Object.entries(bed.cells || {}).forEach(([k, arr]) => {
+        if (!Array.isArray(arr) || arr.length === 0) return;
+        occupied += 1;
+        arr.forEach(raw => {
+          const cell = normalizeCellValue(raw, k);
+          if (cell?.origin && cell.plantId !== '__path__') {
+            total += (cell.rowBlockTotal > 1 ? cell.rowBlockTotal : 1);
+            vars.add(cell.plantId);
+          }
+        });
       });
     });
     const area  = beds.reduce((a, b) => a + (b.widthM * b.heightM), 0);
@@ -4423,18 +4426,29 @@ const Beds = (() => {
         if (!bed) return;
         const newCols = Math.min(MAX_CELLS, Math.max(1, Math.round(widthM  / CELL_M)));
         const newRows = Math.min(MAX_CELLS, Math.max(1, Math.round(heightM / CELL_M)));
+        // Drop cells outside the new bounds.
         Object.keys(bed.cells).forEach(k => {
           const [r, c] = k.split(',').map(Number);
           if (r >= newRows || c >= newCols) delete bed.cells[k];
         });
+        // After clipping, drop any instance whose origin landed outside the bed —
+        // a multi-cell plant with a missing origin is dangling.
         const aliveOrigins = new Set();
-        Object.entries(bed.cells).forEach(([k, v]) => {
-          const cell = normalizeCellValue(v, k);
-          if (cell?.origin) aliveOrigins.add(cell.instanceId);
+        Object.values(bed.cells).forEach(arr => {
+          if (!Array.isArray(arr)) return;
+          arr.forEach(raw => {
+            const cell = normalizeCellValue(raw, '0,0');
+            if (cell?.origin) aliveOrigins.add(cell.instanceId);
+          });
         });
-        Object.entries(bed.cells).forEach(([k, v]) => {
-          const cell = normalizeCellValue(v, k);
-          if (cell && !aliveOrigins.has(cell.instanceId)) delete bed.cells[k];
+        Object.entries(bed.cells).forEach(([k, arr]) => {
+          if (!Array.isArray(arr)) return;
+          const filtered = arr.filter(raw => {
+            const cell = normalizeCellValue(raw, k);
+            return !cell || aliveOrigins.has(cell.instanceId);
+          });
+          if (filtered.length === 0) delete bed.cells[k];
+          else if (filtered.length !== arr.length) bed.cells[k] = filtered;
         });
         bed.name = name; bed.widthM = widthM; bed.heightM = heightM;
         bed.cols = newCols; bed.rows = newRows;
@@ -4515,7 +4529,6 @@ const Beds = (() => {
   function snapshotBedState(bed) {
     return JSON.stringify({
       cells: bed?.cells || {},
-      successionCells: bed?.successionCells || {},
       plotLayout: Array.isArray(bed?.plotLayout) ? bed.plotLayout : [],
     });
   }
@@ -4524,13 +4537,10 @@ const Beds = (() => {
     const parsed = JSON.parse(snapshot);
     if (parsed && typeof parsed === 'object' && !Array.isArray(parsed) && Object.prototype.hasOwnProperty.call(parsed, 'cells')) {
       bed.cells = parsed.cells || {};
-      bed.successionCells = parsed.successionCells || {};
       bed.plotLayout = Array.isArray(parsed.plotLayout) ? parsed.plotLayout : [];
       return;
     }
-    // Backward compatibility for snapshots created before plot layout was tracked.
     bed.cells = parsed || {};
-    bed.successionCells = {};
     bed.plotLayout = Array.isArray(bed.plotLayout) ? bed.plotLayout : [];
   }
 
