@@ -517,6 +517,10 @@ body {
   overflow: hidden;
   flex-shrink: 0;
 }
+/* Suppress cell transitions while the user is dragging — preview classes get
+   added and removed many times per second and the transitions thrash the
+   compositor. Snap instantly during drag, restore transitions afterwards. */
+.bed-grid-wrap.is-dragging .gcell { transition: none !important; }
 .gcell.can-place:hover { background: #9dd9a8; }
 .gcell.placing-mode { cursor: crosshair; }
 .gcell.placing-mode.can-place:hover { background: #74c88c; }
@@ -660,10 +664,25 @@ body {
 .gcell.gcell-mc-shared.instance-focus { box-shadow: none !important; }
 .gcell.gcell-mc-shared.instance-hover { box-shadow: none !important; }
 
-/* Meter lines — subtle shadow in the 2px gap at every 1 m boundary */
-.gcell.gcell-meter-col                             { box-shadow: 2px 0 0 0 rgba(0,0,0,.20); }
-.gcell.gcell-meter-row                             { box-shadow: 0 2px 0 0 rgba(0,0,0,.20); }
-.gcell.gcell-meter-col.gcell-meter-row             { box-shadow: 2px 0 0 0 rgba(0,0,0,.20), 0 2px 0 0 rgba(0,0,0,.20); }
+/* 1 m gridlines: drawn on the bed background, beneath cells and plant overlays.
+   A plant footprint renders on top with its own opaque background, so the line
+   only ever shows in empty grid area — it never cuts through a plant. */
+.bed-meter-gridlines {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+}
+.bed-meter-line-v {
+  position: absolute;
+  width: 2px;
+  background: rgba(0,0,0,.20);
+}
+.bed-meter-line-h {
+  position: absolute;
+  height: 2px;
+  background: rgba(0,0,0,.20);
+}
 
 .gcell-edge-icon {
   position: absolute;
@@ -1270,6 +1289,10 @@ body {
   border: 1px solid rgba(0,0,0,.15);
   border-radius: 4px;
   box-sizing: border-box;
+  /* Overlay stays transparent: the per-cell `.gcell.occupied.gcell-multi-member.rot-X`
+     rgba(.,.1) backgrounds underneath provide the translucent plant tint, and the
+     meter-gridline segments are drawn only between empty cells (never under plants). */
+  z-index: 5;
 }
 .gcell-plant-overlay.rot-legumes       { border-color: rgba(139,69,197,.5); }
 .gcell-plant-overlay.rot-brassicas     { border-color: rgba(26,111,168,.5); }
@@ -1291,6 +1314,7 @@ body {
   border: 1px solid rgba(0,0,0,.15);
   border-radius: 4px;
   box-sizing: border-box;
+  z-index: 5;
 }
 .gcell-row-emoji-overlay.rot-legumes       { border-color: rgba(139,69,197,.5); }
 .gcell-row-emoji-overlay.rot-brassicas     { border-color: rgba(26,111,168,.5); }

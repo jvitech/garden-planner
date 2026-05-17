@@ -37,8 +37,9 @@ const PlantDB = (() => {
   }
 
   let _cache = null;
+  let _byId  = null;
   if (typeof window !== 'undefined') {
-    window.addEventListener('gp:data-changed', () => { _cache = null; });
+    window.addEventListener('gp:data-changed', () => { _cache = null; _byId = null; });
   }
 
   function all() {
@@ -54,7 +55,17 @@ const PlantDB = (() => {
     return _cache;
   }
   function get(id) {
-    return all().find(p => p.id === id) ?? null;
+    if (!id) return null;
+    // Resolve `all()` BEFORE allocating the index Map. The `gp:data-changed`
+    // handler nulls both `_cache` and `_byId` together, so calling all() inside
+    // the loop initialiser risks tearing if a rebuild happens mid-build.
+    const list = all();
+    if (!_byId) {
+      const idx = new Map();
+      for (const p of list) idx.set(p.id, p);
+      _byId = idx;
+    }
+    return _byId.get(id) ?? null;
   }
   function isBuiltin(id) {
     return !!builtinBase(id);

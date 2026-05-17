@@ -44,6 +44,10 @@ const Beds = (() => {
   // In-memory only — reset on reload. null/missing → default ordering applies.
   const liftedInstanceByBed = new Map();
 
+  // Shared empty-array sentinel for the renderer's empty-cell fast path. Avoids
+  // allocating a fresh [] for every empty (r,c) on every render.
+  const EMPTY_ARR = Object.freeze([]);
+
   const JOURNAL_IMAGE_DIR = 'photos/journal';
   const SEED_IMAGE_DIR = 'photos/seeds';
   const JOURNAL_IMAGE_EXTS = ['jpg', 'jpeg', 'png', 'webp', 'gif'];
@@ -514,11 +518,21 @@ const Beds = (() => {
     syncPlotAnchorPreview();
   }
 
+  // Track the element currently carrying .preview-anchor directly. Used to be a
+  // document-wide querySelectorAll on every preview update — that runs on every
+  // dragover / cellEnter and was disproportionately slow on big beds.
+  let _plotAnchorEl = null;
   function syncPlotAnchorPreview() {
-    document.querySelectorAll('.gcell.preview-anchor').forEach(el => el.classList.remove('preview-anchor'));
+    if (_plotAnchorEl) {
+      _plotAnchorEl.classList.remove('preview-anchor');
+      _plotAnchorEl = null;
+    }
     if (!plotDrawMode || !plotAnchor) return;
     const el = gcellEl(plotAnchor.bedId, plotAnchor.r, plotAnchor.c);
-    if (el) el.classList.add('preview-anchor');
+    if (el) {
+      el.classList.add('preview-anchor');
+      _plotAnchorEl = el;
+    }
   }
 
   function selectionRect(startR, startC, endR, endC) {
@@ -1785,6 +1799,10 @@ const Beds = (() => {
   // ── canvas (all beds stacked) ─────────────────────────────────
   function renderCanvas(opts = {}) {
     const scrollToActive = !!opts.scrollToActive;
+    // `opts.bedIds` (array) or `opts.bedId` (single) limits the re-render to only
+    // those bed blocks — replaces them in place via outerHTML. Anything not
+    // currently in the DOM falls through to a full canvas re-render.
+    const targetIds = opts.bedIds || (opts.bedId ? [opts.bedId] : null);
     const beds    = Store.getBeds();
     const inner   = document.getElementById('bed-canvas-inner');
     if (!beds.length) {
@@ -1795,6 +1813,30 @@ const Beds = (() => {
         </div>`;
       return;
     }
+
+    // Fast path: re-render only the named beds in place. Much cheaper than
+    // re-running bedBlockHtml for every bed in the canvas.
+    if (targetIds && targetIds.length) {
+      let allReplaced = true;
+      for (const id of targetIds) {
+        const bed = beds.find(b => b.id === id);
+        const existing = document.getElementById(`bedblock-${id}`);
+        if (!bed || !existing) { allReplaced = false; break; }
+        const tmp = document.createElement('div');
+        tmp.innerHTML = bedBlockHtml(bed);
+        const fresh = tmp.firstElementChild;
+        if (!fresh) { allReplaced = false; break; }
+        existing.replaceWith(fresh);
+      }
+      if (allReplaced) {
+        syncPlotAnchorPreview();
+        if (selectedLifecycleInstances.length) focusSelectedInstances();
+        else if (lastClickedInstance) focusInstanceCells(lastClickedInstance.bedId, lastClickedInstance.instanceId);
+        return;
+      }
+      // One of the targeted beds wasn't in the DOM — fall through to full render.
+    }
+
     inner.innerHTML = beds.map(b => bedBlockHtml(b)).join('');
     syncPlotAnchorPreview();
     if (selectedLifecycleInstances.length) focusSelectedInstances();
@@ -1923,7 +1965,7 @@ const Beds = (() => {
     Store.updateBed(bed);
     clearPreview();
     renderBedList();
-    renderCanvas();
+    renderCanvas({ bedId });
     renderBedJournal();
     updateArmedSeedToolbar();
     updateSelectedPanel();
@@ -2049,8 +2091,13 @@ const Beds = (() => {
     lastPointerClientY = null;
   }
 
+  // Cached lookup — this element doesn't change across renders, but
+  // `updateAutoScrollFromPointer` calls this on every mousemove during drag.
+  let _bedCanvasAreaEl = null;
   function getBedCanvasAreaEl() {
-    return document.querySelector('#page-beds .bed-canvas-area');
+    if (_bedCanvasAreaEl && _bedCanvasAreaEl.isConnected) return _bedCanvasAreaEl;
+    _bedCanvasAreaEl = document.querySelector('#page-beds .bed-canvas-area');
+    return _bedCanvasAreaEl;
   }
 
   function stopAutoScrollLoop() {
@@ -2175,14 +2222,30 @@ const Beds = (() => {
     const activeZone = activePlotZoneForBed(bed.id);
 
     // Single flat instanceMeta map covering every plant in the bed, no matter
-    // where in the chain it sits at any cell. One walk over all entries.
+    // where in the chain it sits at any cell. One walk over all entries also
+    // pre-normalises every cell array so the inner render loop can read normalised
+    // entries directly (avoids 2× repeat normalizeCellValue() per cell).
     const instanceMeta = {};
+    const normalizedCells = {};           // key -> array of normalised entries (same order as bed.cells[key])
+    const plantById   = new Map();        // plantId -> plant object, populated lazily as we go
+    const getPlant    = pid => {
+      if (!pid) return null;
+      if (plantById.has(pid)) return plantById.get(pid);
+      const p = PlantDB.get(pid);
+      plantById.set(pid, p);
+      return p;
+    };
     Object.entries(bed.cells || {}).forEach(([key, arr]) => {
-      if (!Array.isArray(arr)) return;
+      if (!Array.isArray(arr) || arr.length === 0) return;
       const [r, c] = key.split(',').map(Number);
-      arr.forEach(raw => {
+      const normalized = [];
+      normalizedCells[key] = normalized;
+      for (const raw of arr) {
         const cell = normalizeCellValue(raw, key);
-        if (!cell) return;
+        normalized.push(cell);
+        if (!cell) continue;
+        // Warm the plant cache so the render loop's getPlant() calls are O(1).
+        getPlant(cell.plantId);
         const existing = instanceMeta[cell.instanceId] || {
           minR: r, maxR: r, minC: c, maxC: c,
           seedId: null,
@@ -2197,8 +2260,28 @@ const Beds = (() => {
         if (cell.origin) existing.lifecycle = cell.lifecycle || 'planned';
         if (cell.origin) existing.seasonalMode = cell.seasonalMode || false;
         instanceMeta[cell.instanceId] = existing;
-      });
+      }
     });
+
+    // Per-plant memos for the cell loop (constant within a single render).
+    const rgByPlantId    = new Map();
+    const rgOf = plant => {
+      if (!plant) return null;
+      const id = plant.id;
+      if (rgByPlantId.has(id)) return rgByPlantId.get(id);
+      const rg = plant._isPath ? null : rotationGroup(plant);
+      rgByPlantId.set(id, rg);
+      return rg;
+    };
+    const stageByPlantId = new Map();
+    const stageOf = plant => {
+      if (selectedViewMonth === null || !plant || plant._isPath) return null;
+      const id = plant.id;
+      if (stageByPlantId.has(id)) return stageByPlantId.get(id);
+      const stage = getSeasonalStage(plant, selectedViewMonth);
+      stageByPlantId.set(id, stage);
+      return stage;
+    };
 
     Object.values(instanceMeta).forEach(meta => {
       const seed = meta.seedId ? invById.get(meta.seedId) : null;
@@ -2226,13 +2309,10 @@ const Beds = (() => {
         <div class="bed-row-lbl${meterRow ? ' meter' : ''}">${isTray ? (r + 1) : (meterRow ? `${Math.round((r + 1) * CELL_M)}m` : '')}</div>`;
       for (let c = 0; c < cols; c++) {
         const key    = `${r},${c}`;
-        // Per-cell storage is now an array of entries (no more primary/succession split).
-        // The "first entry" provides the legacy primary-style variables used below for
-        // seasonal classes and the absent-ghost emoji; the renderer still walks the
-        // whole array to assemble the chain.
-        const cellArr = Array.isArray(bed.cells[key]) ? bed.cells[key] : [];
-        const cell    = cellArr.length > 0 ? normalizeCellValue(cellArr[0], key) : null;
-        const plant   = cell ? PlantDB.get(cell.plantId) : null;
+        // Pre-normalised cell array (from the bed-level pre-pass) — saves ~2× normalize calls per cell.
+        const cellArr = normalizedCells[key] || EMPTY_ARR;
+        const cell    = cellArr.length > 0 ? cellArr[0] : null;
+        const plant   = cell ? getPlant(cell.plantId) : null;
         const isOrigin = !!cell?.origin;
         const meta   = cell ? instanceMeta[cell.instanceId] : null;
         const hasSeedImage = false;
@@ -2248,7 +2328,7 @@ const Beds = (() => {
         if (cell && plant && !plant._isPath && TERMINAL_STATES.has(lifecycle)) {
           isAbsentCell = true;
         } else if (selectedViewMonth !== null && plant && !plant._isPath && (meta?.seasonalMode || plant.perennial)) {
-          const stage = getSeasonalStage(plant, selectedViewMonth);
+          const stage = stageOf(plant);
           if (stage === 'dormant') {
             if (plant.perennial) {
               isDormantCell = true;
@@ -2262,15 +2342,14 @@ const Beds = (() => {
         }
 
         // ── Active chain: collect every plant at this cell that is currently in-season ─
-        // Walk every entry in the cell's array (order = chain order, oldest first).
-        // `isCellAbsent` filters terminal-state and out-of-season plants, so the chain
-        // is just "all plants the user sees at this cell right now".
+        // Walk the (already-normalised) cell array. `isCellAbsent` filters terminal-state
+        // and out-of-season plants, so the chain is just "what the user sees right now".
         const isTerminalAbsence = cell && TERMINAL_STATES.has(lifecycle);
         const chainAtCell = [];
         for (let i = 0; i < cellArr.length; i++) {
-          const c2 = normalizeCellValue(cellArr[i], key);
+          const c2 = cellArr[i];
           if (!c2) continue;
-          const p2 = PlantDB.get(c2.plantId);
+          const p2 = getPlant(c2.plantId);
           if (!p2) continue;
           const m2 = instanceMeta[c2.instanceId] || null;
           const lc2 = m2?.lifecycle ?? c2.lifecycle ?? 'planned';
@@ -2298,7 +2377,7 @@ const Beds = (() => {
         const displayMeta      = activeEntry ? activeEntry.meta  : meta;
         const displayIsOrigin  = activeEntry ? !!activeEntry.isOrigin : isOrigin;
         const displayLifecycle = activeEntry ? (activeEntry.lifecycle || 'planned') : lifecycle;
-        const displayRg        = displayPlant && !displayPlant._isPath ? rotationGroup(displayPlant) : null;
+        const displayRg        = rgOf(displayPlant);
         const displayIsPerimeterCell = !!(displayMeta && (r === displayMeta.minR || r === displayMeta.maxR || c === displayMeta.minC || c === displayMeta.maxC));
 
         // Build the chain-label stack — only when more than one plant in the chain
@@ -2310,7 +2389,7 @@ const Beds = (() => {
           chainLabelsHtml = `<div class="gcell-chain-labels" onmousedown="event.stopPropagation()">`;
           for (const e of chainAtCell) {
             const isActiveLabel = e === activeEntry;
-            const eRg = e.plant && !e.plant._isPath ? rotationGroup(e.plant) : null;
+            const eRg = rgOf(e.plant);
             const eRot = eRg ? ` rot-${eRg.key}` : '';
             const activeCls = isActiveLabel ? ' active' : '';
             const tipBase = isActiveLabel ? 'click for info' : 'click to bring to front';
@@ -2338,8 +2417,8 @@ const Beds = (() => {
         const isRowBlockEarly = !!(displayCell?.rowBlockMode && (displayCell?.rowBlockTotal || 0) > 1);
         const multiMemberCls = (displayPlant && !displayPlant._isPath && (displayIsMultiCellEarly || isRowBlockEarly) && cellHasActive) ? ' gcell-multi-member' : '';
         const mcSharedCls = (displayPlant && !displayPlant._isPath && displayIsMultiCellEarly && cellHasActive) ? ' gcell-mc-shared' : '';
-        const meterColCls = !isTray && (c + 1) % 10 === 0 ? ' gcell-meter-col' : '';
-        const meterRowCls = meterRow ? ' gcell-meter-row' : '';
+        // 1 m gridlines are now drawn on the bed background as a separate overlay
+        // (see meterOverlayHtml below). Cells no longer carry per-cell meter classes.
         const pathBg = displayPlant?._isPath ? (displayCell?.pathColor || '#c8a882') : null;
         const seasonalBg = (seasonalMeta && !pathBg && !isAbsentCell) ? `;background:${seasonalMeta.color}` : '';
         const pathColorStyle = pathBg ? `;background:${pathBg};border-color:${pathBg}` : '';
@@ -2347,7 +2426,7 @@ const Beds = (() => {
           ? `draggable="true" ondragstart="Beds.dragStart(event,'${bed.id}',${r},${c})" ondragend="Beds.dragEnd()"`
           : '';
         const displayInstanceId = displayCell?.instanceId || '';
-        rowsHtml += `<div id="gcell-${bed.id}-${r}-${c}" class="gcell${effectiveOcc}${effectiveCat}${effectiveRot}${pm}${canPl}${pathCls}${dormantCls}${absentCls}${terminatedCls}${multiMemberCls}${mcSharedCls}${meterColCls}${meterRowCls}"
+        rowsHtml += `<div id="gcell-${bed.id}-${r}-${c}" class="gcell${effectiveOcc}${effectiveCat}${effectiveRot}${pm}${canPl}${pathCls}${dormantCls}${absentCls}${terminatedCls}${multiMemberCls}${mcSharedCls}"
           ${dragAttrs}
           style="width:${cs}px;height:${cs}px${pathColorStyle}${seasonalBg}"
           data-bed="${bed.id}" data-r="${r}" data-c="${c}"
@@ -2484,6 +2563,59 @@ const Beds = (() => {
       }).join('')}
     </div>` : '';
 
+    // 1 m gridlines: drawn as segments in the 2 px gap at each meter boundary,
+    // but ONLY across consecutive empty cells — never crossing a plant footprint.
+    // Consecutive empty rows/cols are coalesced into a single segment to keep the
+    // DOM node count low (empty bed = ~20 segments per bed instead of thousands).
+    const LEFT_OFFSET = 10 + 28;
+    const TOP_OFFSET  = 10 + 20;
+    const cellIsEmpty = (rr, cc) => {
+      if (rr < 0 || rr >= rows || cc < 0 || cc >= cols) return true;
+      const arr = normalizedCells[`${rr},${cc}`];
+      return !arr || arr.length === 0;
+    };
+    const meterLines = [];
+    if (!isTray) {
+      // Vertical gridlines: between col cc and col cc+1. Coalesce runs of rows where
+      // both adjacent cells are empty into one tall segment per run.
+      for (let cc = 9; cc < cols; cc += 10) {
+        const x = LEFT_OFFSET + ((cc + 1) * (cs + 2)) - 2;
+        let runStart = -1;
+        for (let rr = 0; rr <= rows; rr++) {
+          const open = rr < rows && cellIsEmpty(rr, cc) && cellIsEmpty(rr, cc + 1);
+          if (open && runStart < 0) runStart = rr;
+          if ((!open || rr === rows) && runStart >= 0) {
+            const runEnd = rr - 1;
+            const span   = runEnd - runStart + 1;
+            const y      = TOP_OFFSET + (runStart * (cs + 2));
+            const height = (span * cs) + ((span - 1) * 2);
+            meterLines.push(`<div class="bed-meter-line-v" style="left:${x}px;top:${y}px;height:${height}px"></div>`);
+            runStart = -1;
+          }
+        }
+      }
+      // Horizontal gridlines: same idea across consecutive empty cols at meter row.
+      for (let rr = 9; rr < rows; rr += 10) {
+        const y = TOP_OFFSET + ((rr + 1) * (cs + 2)) - 2;
+        let runStart = -1;
+        for (let cc = 0; cc <= cols; cc++) {
+          const open = cc < cols && cellIsEmpty(rr, cc) && cellIsEmpty(rr + 1, cc);
+          if (open && runStart < 0) runStart = cc;
+          if ((!open || cc === cols) && runStart >= 0) {
+            const runEnd = cc - 1;
+            const span   = runEnd - runStart + 1;
+            const x      = LEFT_OFFSET + (runStart * (cs + 2));
+            const width  = (span * cs) + ((span - 1) * 2);
+            meterLines.push(`<div class="bed-meter-line-h" style="top:${y}px;left:${x}px;width:${width}px"></div>`);
+            runStart = -1;
+          }
+        }
+      }
+    }
+    const meterOverlayHtml = meterLines.length
+      ? `<div class="bed-meter-gridlines">${meterLines.join('')}</div>`
+      : '';
+
     return `
 <div class="bed-block${isTray ? ' seed-tray-block' : ''}${isPlot ? ' plot-bed-block' : ''}" data-id="${bed.id}" id="bedblock-${bed.id}" style="width:fit-content">
   <div class="bed-title-bar">
@@ -2518,6 +2650,7 @@ const Beds = (() => {
   </div>
   <div class="bed-grid-wrap" style="position:relative">
     ${colLabels}
+    ${meterOverlayHtml}
     ${rowsHtml}
     ${plantEmojiOverlayHtml}
     ${pathLabelOverlayHtml}
@@ -2751,12 +2884,29 @@ const Beds = (() => {
     event.dataTransfer.effectAllowed = 'move';
     event.dataTransfer.setData('text/plain', src.instanceId);
     event.target.closest('.gcell')?.classList.add('drag-source');
+    // Mark the canvas as actively dragging so .gcell transitions are suppressed
+    // — preview classes flip many times during a drag and the CSS animations
+    // were thrashing the compositor.
+    document.querySelectorAll('.bed-grid-wrap').forEach(el => el.classList.add('is-dragging'));
     clearPreview();
   }
 
-  function dragOver(event, bedId, r, c) {
-    if (!dragState) return;
-    event.preventDefault();
+  // HTML5 dragover fires very frequently (potentially on every mousemove,
+  // sometimes even while the cursor is stationary). The preview only needs to
+  // repaint when the cursor enters a new cell, so:
+  //   1. `dragOver` short-circuits when the (bedId, r, c) hasn't changed.
+  //   2. Remaining changes are coalesced via requestAnimationFrame.
+  //   3. `preventDefault()` is still called synchronously so the drop target
+  //      stays valid.
+  let _dragOverRaf = null;
+  let _dragOverPending = null;
+  let _dragOverLastCell = null;     // last (bedId, r, c) that actually triggered a preview update
+  function _dragOverFlush() {
+    _dragOverRaf = null;
+    const pending = _dragOverPending;
+    _dragOverPending = null;
+    if (!pending || !dragState) return;
+    const { bedId, r, c } = pending;
     const bed = Store.getBeds().find(b => b.id === bedId);
     if (!bed) return;
     const ignoreInstanceId = bedId === dragState.sourceBedId ? dragState.instanceId : null;
@@ -2764,6 +2914,20 @@ const Beds = (() => {
       ? { rows: dragState.blockRows, cols: dragState.blockCols, widthCm: dragState.blockCols * CELL_CM, heightCm: dragState.blockRows * CELL_CM }
       : null;
     showPlacementPreview(bedId, bed, r, c, dragState.plantId, dragState.rotation, ignoreInstanceId, 'move', fpOverride);
+  }
+  function dragOver(event, bedId, r, c) {
+    if (!dragState) return;
+    event.preventDefault();
+    // Short-circuit: same cell as last flushed → no work to do.
+    if (_dragOverLastCell
+        && _dragOverLastCell.bedId === bedId
+        && _dragOverLastCell.r === r
+        && _dragOverLastCell.c === c) {
+      return;
+    }
+    _dragOverLastCell = { bedId, r, c };
+    _dragOverPending = { bedId, r, c };
+    if (_dragOverRaf === null) _dragOverRaf = requestAnimationFrame(_dragOverFlush);
   }
 
   function drop(event, bedId, r, c) {
@@ -2831,9 +2995,10 @@ const Beds = (() => {
       }
     );
     Store.updateBed(sourceBed);
-    if (targetBed.id !== sourceBed.id) Store.updateBed(targetBed); else Store.updateBed(targetBed);
+    if (targetBed.id !== sourceBed.id) Store.updateBed(targetBed);
     renderBedList();
-    renderCanvas();
+    const touchedBeds = sourceBed.id === targetBed.id ? [sourceBed.id] : [sourceBed.id, targetBed.id];
+    renderCanvas({ bedIds: touchedBeds });
     renderBedJournal();
     updateStats();
     Toast.show('Plant moved');
@@ -2842,8 +3007,12 @@ const Beds = (() => {
 
   function dragEnd() {
     document.querySelectorAll('.drag-source').forEach(el => el.classList.remove('drag-source'));
+    document.querySelectorAll('.bed-grid-wrap.is-dragging').forEach(el => el.classList.remove('is-dragging'));
     clearPreview();
     dragState = null;
+    if (_dragOverRaf !== null) { cancelAnimationFrame(_dragOverRaf); _dragOverRaf = null; }
+    _dragOverPending = null;
+    _dragOverLastCell = null;
   }
 
   function removePlant(event, bedId, r, c) {
@@ -2893,7 +3062,7 @@ const Beds = (() => {
     }
     Store.updateBed(bed);
     renderBedList();
-    renderCanvas();
+    renderCanvas({ bedId });
     renderBedJournal();
     updateStats();
   }
@@ -2928,7 +3097,7 @@ const Beds = (() => {
     clearInstanceFocus();
 
     renderBedList();
-    renderCanvas();
+    renderCanvas({ bedIds: [...touchedIds] });
     renderBedJournal();
     updateStats();
     Toast.show(`Deleted ${targets.length} plant${targets.length !== 1 ? 's' : ''}`);
@@ -3703,7 +3872,7 @@ const Beds = (() => {
       });
     }
 
-    renderCanvas();
+    renderCanvas({ bedIds: [normalBed.id, trayBed.id] });
     renderBedJournal();
     const plant = PlantDB.get(normalPlantId);
     if (plant) showPlantInfo(plant, 0, lastClickedInstance.instanceId, lastClickedInstance.bedId);
@@ -3789,7 +3958,7 @@ const Beds = (() => {
       if (bed) Store.updateBed(bed);
     });
 
-    renderCanvas();
+    renderCanvas({ bedIds: [...touched] });
     renderBedJournal();
     // Re-render info panel with updated state
     if (lastClickedInstance) {
@@ -4611,11 +4780,19 @@ const Beds = (() => {
     updateRowSelectionFromPointer(event.clientX, event.clientY);
   });
 
+  // Document-level dragover fires several times per second per cursor position.
+  // Auto-scroll only needs the most recent pointer position — coalesce via rAF.
+  let _autoScrollRafToken = null;
+  function _autoScrollFlush() {
+    _autoScrollRafToken = null;
+    if (!dragState) return;
+    updateAutoScrollFromPointer(lastPointerClientX, lastPointerClientY);
+  }
   document.addEventListener('dragover', event => {
     if (!dragState) return;
     lastPointerClientX = event.clientX;
     lastPointerClientY = event.clientY;
-    updateAutoScrollFromPointer(event.clientX, event.clientY);
+    if (_autoScrollRafToken === null) _autoScrollRafToken = requestAnimationFrame(_autoScrollFlush);
   });
 
   document.addEventListener('scroll', event => {

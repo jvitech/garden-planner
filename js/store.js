@@ -40,11 +40,28 @@ const Store = (() => {
     }
   }
 
+  // In-memory caches for hot getters. Every read used to deserialize the whole
+  // value from localStorage — that's measurable cost on per-frame events like
+  // dragover / cellEnter. Caches are populated lazily and refreshed on save().
+  // External writes (e.g. via Store.importAll) all go through saveBeds /
+  // saveCustomPlants / saveInventory which update the cache, so the cached ref
+  // is always the canonical in-memory state.
+  let _bedsCache = null;
+  let _customPlantsCache = null;
+  let _inventoryCache = null;
+
   // ── beds ─────────────────────────────────────────────────────
   // Bed shape: { id, name, widthM, heightM, cols, rows,
   //              cells: { "r,c": { plantId, instanceId, origin, rotation, lifecycle? } } }
-  function getBeds() { return load(KEYS.beds, []); }
-  function saveBeds(beds) { save(KEYS.beds, beds); }
+  function getBeds() {
+    if (_bedsCache) return _bedsCache;
+    _bedsCache = load(KEYS.beds, []);
+    return _bedsCache;
+  }
+  function saveBeds(beds) {
+    _bedsCache = beds;
+    save(KEYS.beds, beds);
+  }
 
   function newBed(name, widthM, heightM) {
     // Each grid cell = 10 cm × 10 cm = 0.1 m
@@ -102,8 +119,15 @@ const Store = (() => {
   }
 
   // ── custom plants ─────────────────────────────────────────────
-  function getCustomPlants() { return load(KEYS.customPlants, []); }
-  function saveCustomPlants(list) { save(KEYS.customPlants, list); }
+  function getCustomPlants() {
+    if (_customPlantsCache) return _customPlantsCache;
+    _customPlantsCache = load(KEYS.customPlants, []);
+    return _customPlantsCache;
+  }
+  function saveCustomPlants(list) {
+    _customPlantsCache = list;
+    save(KEYS.customPlants, list);
+  }
 
   function upsertCustomPlant(plant) {
     const list = getCustomPlants();
@@ -156,8 +180,15 @@ const Store = (() => {
   //   expiry (YYYY-MM-DD), notes,
   //   germinationDaysMin, germinationDaysMax
   // }
-  function getInventory() { return load(KEYS.inventory, []); }
-  function saveInventory(list) { save(KEYS.inventory, list); }
+  function getInventory() {
+    if (_inventoryCache) return _inventoryCache;
+    _inventoryCache = load(KEYS.inventory, []);
+    return _inventoryCache;
+  }
+  function saveInventory(list) {
+    _inventoryCache = list;
+    save(KEYS.inventory, list);
+  }
 
   function upsertSeed(seed) {
     const list = getInventory();
