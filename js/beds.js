@@ -3238,17 +3238,20 @@ const Beds = (() => {
         // Build candidate groups: keyed by trayId + seedId, counting ready plants
         const groupMap = new Map(); // key: `trayId::seedId` → { tray, seedId, seed, count }
         Store.getBeds().filter(b => isSeedTrayBed(b)).forEach(tray => {
-          Object.entries(tray.cells).forEach(([k, v]) => {
-            const cell = normalizeCellValue(v, k);
-            if (!cell?.origin || cell.plantId !== p.id) return;
-            if (!['ready_to_transplant', 'hardened'].includes(cell.lifecycle)) return;
-            const sid = cell.seedId || '';
-            const key = `${tray.id}::${sid}`;
-            if (!groupMap.has(key)) {
-              const seed = sid ? Store.getInventory().find(s => s.id === sid) : null;
-              groupMap.set(key, { tray, seedId: sid, seed, count: 0 });
-            }
-            groupMap.get(key).count += 1;
+          Object.entries(tray.cells || {}).forEach(([k, arr]) => {
+            if (!Array.isArray(arr)) return;
+            arr.forEach(raw => {
+              const cell = normalizeCellValue(raw, k);
+              if (!cell?.origin || cell.plantId !== p.id) return;
+              if (!['ready_to_transplant', 'hardened'].includes(cell.lifecycle)) return;
+              const sid = cell.seedId || '';
+              const mapKey = `${tray.id}::${sid}`;
+              if (!groupMap.has(mapKey)) {
+                const seed = sid ? Store.getInventory().find(s => s.id === sid) : null;
+                groupMap.set(mapKey, { tray, seedId: sid, seed, count: 0 });
+              }
+              groupMap.get(mapKey).count += 1;
+            });
           });
         });
         const candidates = [...groupMap.entries()].map(([key, g]) => {
@@ -3264,8 +3267,8 @@ const Beds = (() => {
           ? (() => {
               const srcBed = Store.getBeds().find(b => b.id === linkedBedId);
               if (!srcBed) return 'Source tray deleted';
-              const srcCell = Object.values(srcBed.cells).find(v => v?.instanceId === linkedInstId && v?.origin);
-              const lc = srcCell ? (LC_META[srcCell.lifecycle] || {}) : {};
+              const srcOrigin = findOriginCell(srcBed, linkedInstId);
+              const lc = srcOrigin ? (LC_META[srcOrigin.cell.lifecycle] || {}) : {};
               return `${escHtml(srcBed.name)} · ${lc.icon || ''} ${lc.label || 'transplanted'}`;
             })()
           : '';
@@ -3601,66 +3604,65 @@ const Beds = (() => {
     const trayBed   = beds.find(b => b.id === trayBedId);
     if (!normalBed || !trayBed) return;
 
-    // Find the first tray instance matching the selected group (tray + seedId)
-    let normalPlantId = null;
-    Object.entries(normalBed.cells).forEach(([, v]) => {
-      if (typeof v === 'object' && v?.instanceId === lastClickedInstance.instanceId && v?.origin) {
-        normalPlantId = v.plantId;
-      }
-    });
+    // Find the normal-bed origin entry for the selected instance.
+    const normalOrigin = findOriginCell(normalBed, lastClickedInstance.instanceId);
+    if (!normalOrigin) return;
+    const normalPlantId = normalOrigin.cell.plantId;
     if (!normalPlantId) return;
 
+    // Find the first tray instance matching the selected group (tray + seedId).
     let trayInstId = null;
-    Object.entries(trayBed.cells).forEach(([, v]) => {
-      if (trayInstId) return;
-      const cell = typeof v === 'object' ? v : null;
-      if (!cell?.origin || cell.plantId !== normalPlantId) return;
-      if (!['ready_to_transplant', 'hardened'].includes(cell.lifecycle)) return;
-      if ((cell.seedId || '') !== groupSeedId) return;
-      trayInstId = cell.instanceId;
+    Object.entries(trayBed.cells || {}).forEach(([k, arr]) => {
+      if (trayInstId || !Array.isArray(arr)) return;
+      for (const raw of arr) {
+        const cell = normalizeCellValue(raw, k);
+        if (!cell?.origin || cell.plantId !== normalPlantId) continue;
+        if (!['ready_to_transplant', 'hardened'].includes(cell.lifecycle)) continue;
+        if ((cell.seedId || '') !== groupSeedId) continue;
+        trayInstId = cell.instanceId;
+        break;
+      }
     });
     if (!trayInstId) { Toast.show('No matching tray seedling found'); return; }
 
-    // Update normal-bed origin cell: store source refs, advance lifecycle to transplanted
-    let normalSeedId  = null;
-    let normalContext = { bedContextId: normalBed.id, bedContextName: normalBed.name };
-    Object.entries(normalBed.cells).forEach(([k, v]) => {
-      if (typeof v === 'object' && v?.instanceId === lastClickedInstance.instanceId && v?.origin) {
-        normalSeedId  = v.seedId || null;
-        normalContext = contextFromOriginCell(normalBed, normalizeCellValue(v, k), k);
-        normalBed.cells[k] = {
-          ...v,
-          transplantSourceBedId:      trayBedId,
-          transplantSourceInstanceId: trayInstId,
-          lifecycle: 'transplanted',
-        };
-      }
-    });
+    // Update normal-bed origin entry: store source refs, advance lifecycle.
+    let normalSeedId  = normalOrigin.cell.seedId || null;
+    const normalContext = contextFromOriginCell(normalBed, normalizeCellValue(normalOrigin.cell, normalOrigin.key), normalOrigin.key);
+    normalBed.cells[normalOrigin.key][normalOrigin.index] = {
+      ...normalOrigin.cell,
+      transplantSourceBedId:      trayBedId,
+      transplantSourceInstanceId: trayInstId,
+      lifecycle: 'transplanted',
+    };
 
-    // Remove all tray cells belonging to this instance (plant transplanted out)
+    // Remove all tray cell entries belonging to this instance (plant transplanted out).
     let trayPrevState = 'planned';
     let trayPlantId   = null;
     let traySeedId    = null;
     let trayContext   = { bedContextId: trayBed.id, bedContextName: trayBed.name };
-    Object.entries(trayBed.cells).forEach(([k, v]) => {
-      if (typeof v === 'object' && v?.instanceId === trayInstId) {
-        if (v?.origin) {
-          trayPrevState = v.lifecycle || 'planned';
-          trayPlantId   = v.plantId;
-          traySeedId    = v.seedId || null;
-          trayContext   = contextFromOriginCell(trayBed, normalizeCellValue(v, k), k);
+    Object.entries(trayBed.cells || {}).forEach(([k, arr]) => {
+      if (!Array.isArray(arr)) return;
+      const filtered = arr.filter(raw => {
+        const cell = normalizeCellValue(raw, k);
+        if (cell?.instanceId !== trayInstId) return true;
+        if (cell.origin) {
+          trayPrevState = cell.lifecycle || 'planned';
+          trayPlantId   = cell.plantId;
+          traySeedId    = cell.seedId || null;
+          trayContext   = contextFromOriginCell(trayBed, normalizeCellValue(cell, k), k);
         }
-        delete trayBed.cells[k];
-      }
+        return false;
+      });
+      if (filtered.length === 0) delete trayBed.cells[k];
+      else if (filtered.length !== arr.length) trayBed.cells[k] = filtered;
     });
 
-    // Always inherit the tray seedling's seed — the transplanted plant defines the seed identity.
+    // Always inherit the tray seedling's seed.
     if (traySeedId && traySeedId !== normalSeedId) {
-      Object.entries(normalBed.cells).forEach(([k, v]) => {
-        if (typeof v === 'object' && v?.instanceId === lastClickedInstance.instanceId && v?.origin) {
-          normalBed.cells[k] = { ...normalBed.cells[k], seedId: traySeedId };
-        }
-      });
+      normalBed.cells[normalOrigin.key][normalOrigin.index] = {
+        ...normalBed.cells[normalOrigin.key][normalOrigin.index],
+        seedId: traySeedId,
+      };
       normalSeedId = traySeedId;
     }
 
@@ -3717,7 +3719,7 @@ const Beds = (() => {
     const foundDetach = findOriginCell(normalBed, lastClickedInstance.instanceId);
     if (!foundDetach) return;
     const plantId = foundDetach.cell.plantId;
-    foundDetach.cells[foundDetach.key] = {
+    normalBed.cells[foundDetach.key][foundDetach.index] = {
       ...foundDetach.cell,
       transplantSourceBedId: null,
       transplantSourceInstanceId: null,
@@ -3757,7 +3759,7 @@ const Beds = (() => {
         seedId    = found.cell.seedId || null;
         qty       = found.cell.rowBlockTotal > 1 ? found.cell.rowBlockTotal : 1;
         context   = contextFromOriginCell(bed, normalizeCellValue(found.cell, found.key), found.key);
-        found.cells[found.key] = { ...found.cell, lifecycle: state };
+        bed.cells[found.key][found.index] = { ...found.cell, lifecycle: state };
       }
 
       if (!plantId) return;
