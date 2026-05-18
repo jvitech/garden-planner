@@ -364,19 +364,27 @@ const Beds = (() => {
     return count;
   }
 
-  // Returns true if the cell is absent — either a terminal lifecycle state (always) or
-  // a seasonal annual that is out-of-season in the current month view.
+  // Returns true if the cell is absent — i.e. the bed slot is effectively free
+  // this month. Three cases:
+  //   1. Terminal lifecycle state (harvested / failed / terminated) — always absent.
+  //   2. Seasonal annual that is out-of-season ("dormant" stage) in month view.
+  //   3. Transplant-mode annual whose stage is "sow indoors / under cover" —
+  //      the plant is physically in a seedling tray, not the bed, so the bed
+  //      cell can be reused.
   // resolvedLifecycle: pass instanceMeta lifecycle when available to cover non-origin cells.
   function isCellAbsent(cell, plant, resolvedLifecycle) {
     if (!cell || !plant || plant._isPath) return false;
     const lc = resolvedLifecycle || cell.lifecycle || 'planned';
-    // Terminal states free the slot regardless of view mode
     if (TERMINAL_STATES.has(lc)) return true;
-    // Seasonal absence: requires month view, non-perennial, seasonalMode flag
     if (selectedViewMonth === null) return false;
     if (plant.perennial) return false;
     if (!cell.seasonalMode) return false;
-    return getSeasonalStage(plant, selectedViewMonth) === 'dormant';
+    const stage = getSeasonalStage(plant, selectedViewMonth);
+    if (stage === 'dormant') return true;
+    if (stage === 'sowing_indoor'
+        && plant.plantingMode === 'transplant'
+        && (plant.sowIndoor?.length || 0) > 0) return true;
+    return false;
   }
 
   // ── cell-array helpers ────────────────────────────────────────
@@ -2324,6 +2332,7 @@ const Beds = (() => {
         let seasonalMeta = null;
         let isDormantCell = false;  // perennial dormant: occupied but dimmed
         let isAbsentCell  = false;  // annual out-of-season OR terminal state: slot appears free
+        let isInTrayCell  = false;  // transplant-mode plant in "sow indoors" — physically in tray
         // Terminal states always free the slot — use instanceMeta lifecycle (covers non-origin cells)
         if (cell && plant && !plant._isPath && TERMINAL_STATES.has(lifecycle)) {
           isAbsentCell = true;
@@ -2336,6 +2345,13 @@ const Beds = (() => {
             } else {
               isAbsentCell = true;
             }
+          } else if (stage === 'sowing_indoor'
+                     && !plant.perennial
+                     && plant.plantingMode === 'transplant'
+                     && (plant.sowIndoor?.length || 0) > 0) {
+            // Plant is in a seedling tray during this stage — bed cell is free.
+            isAbsentCell = true;
+            isInTrayCell = true;
           } else {
             seasonalMeta = SEASONAL_STAGE_META[stage];
           }
@@ -2489,9 +2505,19 @@ const Beds = (() => {
             }
           }
         }
-        // Ghost hint for absent annual with no active occupant: faint emoji so you can tell something is planned
+        // Ghost hint for absent annual with no active occupant: faint emoji so you can tell something is planned.
+        // When the plant is currently in a tray (transplant-mode + sowing_indoor stage), add a 🪴 badge so the
+        // user can distinguish "in tray right now" from "out of season".
         if (isAbsentCell && !cellHasActive && isOrigin) {
-          rowsHtml += `<div class="gcell-absent-ghost" title="${escAttr(plant.name)} — not here this month">${plantIconHtml(plant, Math.round(cs * 0.5))}</div>`;
+          const ghostTitle = isInTrayCell
+            ? `${plant.name} — currently in tray (not in bed this month)`
+            : `${plant.name} — not here this month`;
+          rowsHtml += `<div class="gcell-absent-ghost" title="${escAttr(ghostTitle)}">${plantIconHtml(plant, Math.round(cs * 0.5))}</div>`;
+          if (isInTrayCell) {
+            // 🪴 (LC_META.tray_seeded.icon) — same icon used for the "Transplant"
+            // preferred-method option below, so both reads consistently as "tray-based".
+            rowsHtml += `<div class="gcell-in-tray-badge" title="${escAttr(plant.name + ' — currently in tray')}">${LC_META.tray_seeded.icon}</div>`;
+          }
         }
         // Hide the per-cell ✕ when 2+ plants share the cell — ambiguous which one
         // the click would remove. User deletes specific plants via the info panel.
@@ -3388,8 +3414,8 @@ const Beds = (() => {
         <div style="font-size:.62rem;font-weight:800;color:var(--text-muted);margin-bottom:4px">🌱 PREFERRED METHOD</div>
         <select style="font-size:.75rem" onchange="Beds.setPlantingMode(this.value)">
           <option value=""         ${!p.plantingMode              ? 'selected' : ''}>Not specified</option>
-          <option value="direct"   ${p.plantingMode === 'direct'   ? 'selected' : ''}>🌰 Direct sow</option>
-          <option value="transplant" ${p.plantingMode === 'transplant' ? 'selected' : ''}>🏺 Transplant (start in tray)</option>
+          <option value="direct"   ${p.plantingMode === 'direct'   ? 'selected' : ''}>${LC_META.direct_sow.icon} Direct sow</option>
+          <option value="transplant" ${p.plantingMode === 'transplant' ? 'selected' : ''}>${LC_META.tray_seeded.icon} Transplant (start in tray)</option>
         </select>
       </div>`;
     }
