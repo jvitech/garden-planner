@@ -48,6 +48,17 @@ const Beds = (() => {
   // allocating a fresh [] for every empty (r,c) on every render.
   const EMPTY_ARR = Object.freeze([]);
 
+  // Tracks elements currently carrying .instance-hover so clearInstanceHover()
+  // can remove the class without a DOM scan.
+  let _hoveredInstanceEls = [];
+  // Same pattern for .instance-focus — avoids a querySelectorAll on every click.
+  let _focusedInstanceEls = [];
+  // Module-level timer for is-scrolling debounce (avoids expando on DOM element).
+  let _isScrollingTimer = null;
+  // showPlantInfo cache — skip re-render when same plant+instance already showing.
+  let _shownInfoPlantId = null;
+  let _shownInfoInstanceId = null;
+
   const JOURNAL_IMAGE_DIR = 'photos/journal';
   const SEED_IMAGE_DIR = 'photos/seeds';
   const JOURNAL_IMAGE_EXTS = ['jpg', 'jpeg', 'png', 'webp', 'gif'];
@@ -146,7 +157,7 @@ const Beds = (() => {
         ${small ? `<span style="position:absolute;bottom:2px;right:3px;font-size:.65rem;line-height:1">${small}</span>` : ''}
       </div>`;
     }
-    return `<img class="journal-media-img" src="${escAttr(sources[0])}" alt="${escAttr(label)}" data-src-list="${escAttr(sources.join('|'))}" data-src-index="0" onload="Beds.handleJournalImageLoad(this)" onerror="Beds.handleJournalImageError(this)" onclick="Beds.openJournalImage(event, this)">`;
+    return `<img class="journal-media-img" src="${escAttr(sources[0])}" alt="${escAttr(label)}" decoding="async" loading="lazy" data-src-list="${escAttr(sources.join('|'))}" data-src-index="0" onload="Beds.handleJournalImageLoad(this)" onerror="Beds.handleJournalImageError(this)" onclick="Beds.openJournalImage(event, this)">`;
   }
 
   function getJournalEventDateValue(event) {
@@ -1217,8 +1228,10 @@ const Beds = (() => {
   }
 
   function clearInstanceFocus() {
-    document.querySelectorAll('.gcell.instance-focus').forEach(el => el.classList.remove('instance-focus'));
-    document.querySelectorAll('.gcell-plant-overlay.instance-focus').forEach(el => el.classList.remove('instance-focus'));
+    for (let i = 0; i < _focusedInstanceEls.length; i++) {
+      _focusedInstanceEls[i].classList.remove('instance-focus');
+    }
+    _focusedInstanceEls.length = 0;
     _syncMultiDeleteBtn(0);
   }
 
@@ -1298,17 +1311,23 @@ const Beds = (() => {
     selectedLifecycleInstances.forEach(t => {
       document.querySelectorAll(`.gcell[data-bed="${t.bedId}"][data-instance="${t.instanceId}"]`).forEach(el => {
         el.classList.add('instance-focus');
+        _focusedInstanceEls.push(el);
       });
       document.querySelectorAll(`.gcell-plant-overlay[data-bed="${t.bedId}"][data-instance="${t.instanceId}"]`).forEach(el => {
         el.classList.add('instance-focus');
+        _focusedInstanceEls.push(el);
       });
     });
     _syncMultiDeleteBtn(selectedLifecycleInstances.length);
   }
 
   function clearInstanceHover() {
-    document.querySelectorAll('.gcell.instance-hover').forEach(el => el.classList.remove('instance-hover'));
-    document.querySelectorAll('.gcell-plant-overlay.instance-hover').forEach(el => el.classList.remove('instance-hover'));
+    for (let i = 0; i < _hoveredInstanceEls.length; i++) {
+      _hoveredInstanceEls[i].classList.remove('instance-hover');
+    }
+    _hoveredInstanceEls.length = 0;
+    _shownInfoPlantId    = null;
+    _shownInfoInstanceId = null;
   }
 
   function focusInstanceCells(bedId, instanceId) {
@@ -1316,9 +1335,11 @@ const Beds = (() => {
     if (!bedId || !instanceId) return;
     document.querySelectorAll(`.gcell[data-bed="${bedId}"][data-instance="${instanceId}"]`).forEach(el => {
       el.classList.add('instance-focus');
+      _focusedInstanceEls.push(el);
     });
     document.querySelectorAll(`.gcell-plant-overlay[data-bed="${bedId}"][data-instance="${instanceId}"]`).forEach(el => {
       el.classList.add('instance-focus');
+      _focusedInstanceEls.push(el);
     });
   }
 
@@ -1327,9 +1348,11 @@ const Beds = (() => {
     if (!bedId || !instanceId) return;
     document.querySelectorAll(`.gcell[data-bed="${bedId}"][data-instance="${instanceId}"]`).forEach(el => {
       el.classList.add('instance-hover');
+      _hoveredInstanceEls.push(el);
     });
     document.querySelectorAll(`.gcell-plant-overlay[data-bed="${bedId}"][data-instance="${instanceId}"]`).forEach(el => {
       el.classList.add('instance-hover');
+      _hoveredInstanceEls.push(el);
     });
   }
 
@@ -1484,6 +1507,53 @@ const Beds = (() => {
     updateStats();
     updateRotationUi();
     updateZoomLabel();
+
+    // Event delegation: one set of listeners on the scroll container replaces
+    // per-cell inline handlers, cutting ~350 chars per cell from the HTML string
+    // (faster innerHTML parse and DOM construction on every renderCanvas call).
+    const canvasArea = document.querySelector('.bed-canvas-area');
+    if (canvasArea) {
+      // mouseover/mouseout bubble; mouseenter/mouseleave do not — use the former
+      // and filter to only fire when actually crossing cell boundaries.
+      canvasArea.addEventListener('mouseover', e => {
+        const cell = e.target.closest('.gcell');
+        if (!cell) return;
+        if (e.relatedTarget?.closest?.('.gcell') === cell) return;
+        cellEnter(e, cell.dataset.bed, +cell.dataset.r, +cell.dataset.c);
+      });
+      canvasArea.addEventListener('mouseout', e => {
+        const cell = e.target.closest('.gcell');
+        if (!cell) return;
+        if (e.relatedTarget?.closest?.('.gcell') === cell) return;
+        cellLeave(cell.dataset.bed);
+      });
+      canvasArea.addEventListener('click', e => {
+        const cell = e.target.closest('.gcell');
+        if (!cell) return;
+        cellClick(e, cell.dataset.bed, +cell.dataset.r, +cell.dataset.c);
+      });
+      canvasArea.addEventListener('mousedown', e => {
+        const cell = e.target.closest('.gcell');
+        if (!cell) return;
+        cellMouseDown(e, cell.dataset.bed, +cell.dataset.r, +cell.dataset.c);
+      });
+      canvasArea.addEventListener('dragstart', e => {
+        const cell = e.target.closest('.gcell');
+        if (!cell || cell.getAttribute('draggable') !== 'true') return;
+        dragStart(e, cell.dataset.bed, +cell.dataset.r, +cell.dataset.c);
+      });
+      canvasArea.addEventListener('dragend', () => dragEnd());
+      canvasArea.addEventListener('dragover', e => {
+        const cell = e.target.closest('.gcell');
+        if (!cell) return;
+        dragOver(e, cell.dataset.bed, +cell.dataset.r, +cell.dataset.c);
+      });
+      canvasArea.addEventListener('drop', e => {
+        const cell = e.target.closest('.gcell');
+        if (!cell) return;
+        drop(e, cell.dataset.bed, +cell.dataset.r, +cell.dataset.c);
+      });
+    }
   }
 
   // ── bed list (left sidebar) ───────────────────────────────────
@@ -2439,20 +2509,14 @@ const Beds = (() => {
         const seasonalBg = (seasonalMeta && !pathBg && !isAbsentCell) ? `;background:${seasonalMeta.color}` : '';
         const pathColorStyle = pathBg ? `;background:${pathBg};border-color:${pathBg}` : '';
         const dragAttrs = (displayPlant && displayIsOrigin && !displayPlant?._isPath)
-          ? `draggable="true" ondragstart="Beds.dragStart(event,'${bed.id}',${r},${c})" ondragend="Beds.dragEnd()"`
+          ? `draggable="true"`
           : '';
         const displayInstanceId = displayCell?.instanceId || '';
         rowsHtml += `<div id="gcell-${bed.id}-${r}-${c}" class="gcell${effectiveOcc}${effectiveCat}${effectiveRot}${pm}${canPl}${pathCls}${dormantCls}${absentCls}${terminatedCls}${multiMemberCls}${mcSharedCls}"
           ${dragAttrs}
           style="width:${cs}px;height:${cs}px${pathColorStyle}${seasonalBg}"
           data-bed="${bed.id}" data-r="${r}" data-c="${c}"
-          data-instance="${displayInstanceId}"
-          onclick="Beds.cellClick(event,'${bed.id}',${r},${c})"
-          onmousedown="Beds.cellMouseDown(event,'${bed.id}',${r},${c})"
-          onmouseenter="Beds.cellEnter(event,'${bed.id}',${r},${c})"
-          onmouseleave="Beds.cellLeave('${bed.id}')"
-          ondragover="Beds.dragOver(event,'${bed.id}',${r},${c})"
-          ondrop="Beds.drop(event,'${bed.id}',${r},${c})">`;
+          data-instance="${displayInstanceId}">`;
         if (displayPlant && displayIsOrigin && cellHasActive) {
           if (displayPlant._isPath) {
             const pathDesc = displayCell?.pathDesc || '';
@@ -3203,9 +3267,6 @@ const Beds = (() => {
   }
 
   function cellLeave(bedId) {
-    document.querySelectorAll(`[data-bed="${bedId}"]`).forEach(el => {
-      el.classList.remove('hl-good', 'hl-bad');
-    });
     clearInstanceHover();
     clearPreview();
     // If hover was driving the details panel (no click selection), restore default state
@@ -3221,6 +3282,10 @@ const Beds = (() => {
 
   // ── info panel ────────────────────────────────────────────────
   function showPlantInfo(p, rotation = 0, instanceId = null, bedId = null) {
+    // Skip re-render when hovering over another cell of the same instance.
+    if (p?.id === _shownInfoPlantId && instanceId === _shownInfoInstanceId) return;
+    _shownInfoPlantId    = p?.id   ?? null;
+    _shownInfoInstanceId = instanceId ?? null;
     const sec = document.getElementById('bed-info-detail');
     const el  = document.getElementById('bed-info-content');
     if (!p || !sec || !el) return;
@@ -3241,14 +3306,14 @@ const Beds = (() => {
     const spacingLabel = rowSp > 0
       ? `${spW}×${spH} cm plant · ${rowSp} cm between row centers`
       : (spW !== spH ? `↔ ${spW} cm · ↕ ${spH} cm` : `${spW} cm`);
+    // Single lookup shared by seed-assign, path-edit, and row-details blocks below.
+    const _infobed      = (instanceId && bedId) ? Store.getBeds().find(b => b.id === bedId) : null;
+    const _infoOrigin   = (_infobed && instanceId) ? findOriginCell(_infobed, instanceId) : null;
+    const _infoOriginCell = _infoOrigin ? normalizeCellValue(_infoOrigin.cell, _infoOrigin.key) : null;
+
     let seedAssignHtml = '';
     if (instanceId && bedId && !p._isPath) {
-      const bed = Store.getBeds().find(b => b.id === bedId);
-      let currentSeedId = null;
-      if (bed) {
-        const found = findOriginCell(bed, instanceId);
-        currentSeedId = found?.cell?.seedId || null;
-      }
+      const currentSeedId = _infoOriginCell?.seedId || null;
       const options = seedsForPlant(p.id, false);
       const optHtml = [`<option value="">Generic (no packet)</option>`, ...options.map(s =>
         `<option value="${s.id}" ${currentSeedId===s.id?'selected':''}>${escHtml(seedLabel(s))}</option>`
@@ -3263,9 +3328,7 @@ const Beds = (() => {
     let pathEditHtml = '';
     if (p._isPath) {
       const hasSelectedPathInstance = !!(instanceId && bedId);
-      const bed = hasSelectedPathInstance ? Store.getBeds().find(b => b.id === bedId) : null;
-      const originResult = (bed && hasSelectedPathInstance) ? findOriginCell(bed, instanceId) : null;
-      const origin = originResult?.cell || null;
+      const origin = _infoOriginCell;
       const currentColor = origin?.pathColor || pathConfig.color || '#c8a882';
       const currentDesc = origin?.pathDesc || pathConfig.desc || '';
       const colorHandler = hasSelectedPathInstance
@@ -3292,11 +3355,8 @@ const Beds = (() => {
     // Row details section (only when a specific instance is selected)
     let rowDetailsHtml = '';
     if (instanceId && bedId && !p._isPath) {
-      const bed = Store.getBeds().find(b => b.id === bedId);
-      if (bed) {
-        const foundRow = findOriginCell(bed, instanceId);
-        const originCell = foundRow ? normalizeCellValue(foundRow.cell, foundRow.key) : null;
-        if (originCell && (originCell.rowBlockMode || originCell.rowBatchTotal > 1)) {
+      const originCell = _infoOriginCell;
+      if (originCell && (originCell.rowBlockMode || originCell.rowBatchTotal > 1)) {
           let rowDetailsContent = '';
           const totalPlants = originCell.rowBlockMode && originCell.rowBlockTotal > 1
             ? originCell.rowBlockTotal
@@ -3341,18 +3401,14 @@ const Beds = (() => {
           }
         }
       }
-    }
-
     // Lifecycle section (only when a specific instance is selected)
     let lcHtml = '';
     if (instanceId && bedId && !p._isPath) {
-      const bed = Store.getBeds().find(b => b.id === bedId);
       let lifecycle = 'planned';
       let linkedSeed = null;
-      if (bed) {
-        const foundLc = findOriginCell(bed, instanceId);
-        lifecycle = foundLc?.cell?.lifecycle || 'planned';
-        linkedSeed = foundLc?.cell?.seedId ? Store.getInventory().find(s => s.id === foundLc.cell.seedId) : null;
+      if (_infoOriginCell) {
+        lifecycle = _infoOriginCell.lifecycle || 'planned';
+        linkedSeed = _infoOriginCell.seedId ? Store.getInventory().find(s => s.id === _infoOriginCell.seedId) : null;
       }
       const meta = LC_META[lifecycle] || LC_META.planned;
       const selectionCount = getLifecycleTargets().length;
@@ -3392,7 +3448,7 @@ const Beds = (() => {
         <div style="display:flex;gap:6px;align-items:center;max-width:100%">
           <select id="lc-status-select" style="flex:1;min-width:0;font-size:.72rem" onchange="Beds.setLifecycle(this.value)">
             ${(() => {
-              let states = lcStatesForBed(bedId ? Store.getBeds().find(b => b.id === bedId) : null);
+              let states = lcStatesForBed(_infobed);
               if (p.plantingMode === 'direct')    states = states.filter(s => s !== 'tray_seeded' && s !== 'transplanted');
               if (p.plantingMode === 'transplant') states = states.filter(s => s !== 'direct_sow');
               return states.map(s => {
@@ -3499,7 +3555,7 @@ const Beds = (() => {
             const sources = seedImageSources(seed);
             if (sources.length) {
               seedImageHtml = `<div style="position:relative;width:120px;height:140px">
-                <img src="${escAttr(sources[0])}" alt="${escAttr(seedLabel(seed))} packet" style="width:100%;height:100%;object-fit:cover;border-radius:4px;border:2px solid #ddd" data-src-list="${escAttr(sources.join('|'))}" data-src-index="0" onload="Beds.handlePlantSeedImageLoad(this)" onerror="Beds.handlePlantSeedImageError(this)" />
+                <img src="${escAttr(sources[0])}" alt="${escAttr(seedLabel(seed))} packet" decoding="async" loading="lazy" style="width:100%;height:100%;object-fit:cover;border-radius:4px;border:2px solid #ddd" data-src-list="${escAttr(sources.join('|'))}" data-src-index="0" onload="Beds.handlePlantSeedImageLoad(this)" onerror="Beds.handlePlantSeedImageError(this)" />
                 <div style="display:none;position:absolute;top:0;left:0;width:100%;height:100%;border-radius:4px;border:2px solid #ddd;background:#f5f5f5;font-size:3rem;display:flex;align-items:center;justify-content:center;color:#999">${plantIconHtml(p, 48)}</div>
               </div>`;
             }
@@ -4338,7 +4394,7 @@ const Beds = (() => {
       return '<div class="seed-image-preview-empty">No journal photo attached yet.</div>';
     }
     return `<div class="seed-image-preview-frame">
-      <img class="seed-image-preview-img" src="${escAttr(sources[0])}" alt="Journal photo preview" data-src-list="${escAttr(sources.join('|'))}" data-src-index="0" onload="Beds.handleJournalImageLoad(this)" onerror="Beds.handleJournalImageError(this)">
+      <img class="seed-image-preview-img" src="${escAttr(sources[0])}" alt="Journal photo preview" decoding="async" data-src-list="${escAttr(sources.join('|'))}" data-src-index="0" onload="Beds.handleJournalImageLoad(this)" onerror="Beds.handleJournalImageError(this)">
       <div class="seed-image-preview-empty" style="display:none">No journal photo attached yet.</div>
     </div>`;
   }
@@ -4840,6 +4896,16 @@ const Beds = (() => {
   document.addEventListener('mouseleave', () => {
     stopAutoScrollLoop();
   });
+
+  // Disable pointer-events on the grid during scroll to eliminate per-frame
+  // hover hit-testing (the primary source of scroll Rendering cost).
+  document.addEventListener('scroll', event => {
+    const target = event.target;
+    if (!(target instanceof Element) || !target.classList.contains('bed-canvas-area')) return;
+    target.classList.add('is-scrolling');
+    clearTimeout(_isScrollingTimer);
+    _isScrollingTimer = setTimeout(() => target.classList.remove('is-scrolling'), 150);
+  }, { capture: true, passive: true });
 
   function updateZoomLabel() {
     const el = document.getElementById('bed-zoom-label');

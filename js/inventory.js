@@ -36,7 +36,7 @@ const Inventory = (() => {
     }
 
     return `<div class="seed-card-media" aria-label="${label}">
-      <img class="seed-card-thumb" src="${escAttr(sources[0])}" alt="${label}" data-src-list="${escAttr(sources.join('|'))}" data-src-index="0" onload="Inventory.handleImageLoad(this)" onerror="Inventory.handleImageError(this)" onclick="Inventory.openImageLightbox(this)">
+      <img class="seed-card-thumb" src="${escAttr(sources[0])}" alt="${label}" decoding="async" loading="lazy" data-src-list="${escAttr(sources.join('|'))}" data-src-index="0" onload="Inventory.handleImageLoad(this)" onerror="Inventory.handleImageError(this)" onclick="Inventory.openImageLightbox(this)">
       <div class="seed-card-media-fallback" style="display:none">${emoji}</div>
     </div>`;
   }
@@ -48,7 +48,7 @@ const Inventory = (() => {
     }
 
     return `<div class="seed-image-preview-frame">
-      <img class="seed-image-preview-img" src="${escAttr(sources[0])}" alt="Seed photo preview" data-src-list="${escAttr(sources.join('|'))}" data-src-index="0" onload="Inventory.handleImageLoad(this)" onerror="Inventory.handleImageError(this)">
+      <img class="seed-image-preview-img" src="${escAttr(sources[0])}" alt="Seed photo preview" decoding="async" loading="lazy" data-src-list="${escAttr(sources.join('|'))}" data-src-index="0" onload="Inventory.handleImageLoad(this)" onerror="Inventory.handleImageError(this)">
       <div class="seed-image-preview-empty" style="display:none">No seed photo found yet.</div>
     </div>`;
   }

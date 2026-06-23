@@ -132,5 +132,5 @@ for (const id in PLANT_ICONS) {
 function plantIconHtml(plant, px) {
   const url = plant && _PLANT_ICON_URLS[plant.id];
   if (!url) return plant?.emoji ?? '🌱';
-  return `<img src="${url}" width="${px}" height="${px}" alt="${plant.name}" style="display:inline-block;vertical-align:middle;flex-shrink:0">`;
+  return `<img src="${url}" width="${px}" height="${px}" alt="${plant.name}" decoding="async" style="display:inline-block;vertical-align:middle;flex-shrink:0">`;
 }

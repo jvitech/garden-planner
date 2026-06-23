@@ -491,6 +491,7 @@ body {
   display: flex;
   gap: 2px;
   flex-direction: column;
+  contain: layout paint;
 }
 
 /* Row labels & col labels */
@@ -512,15 +513,13 @@ body {
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  transition: background .1s, box-shadow .1s;
   position: relative;
   overflow: hidden;
   flex-shrink: 0;
 }
-/* Suppress cell transitions while the user is dragging — preview classes get
-   added and removed many times per second and the transitions thrash the
-   compositor. Snap instantly during drag, restore transitions afterwards. */
-.bed-grid-wrap.is-dragging .gcell { transition: none !important; }
+/* Suppress pointer-events on the grid while scrolling — eliminates per-frame
+   hover hit-testing, the primary cause of high Rendering cost during scroll. */
+.bed-canvas-area.is-scrolling .bed-grid-wrap { pointer-events: none; }
 .gcell.can-place:hover { background: #9dd9a8; }
 .gcell.placing-mode { cursor: crosshair; }
 .gcell.placing-mode.can-place:hover { background: #74c88c; }

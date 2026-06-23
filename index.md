@@ -2,7 +2,7 @@
 title: Garden Planner
 type: project-index
 status: active
-updated: 2026-06-17
+updated: 2026-06-23
 ---
 
 # Garden Planner — Project Index
