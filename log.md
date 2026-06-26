@@ -8,6 +8,13 @@ project: garden-planner
 <!-- Newest first. One entry per meaningful change or decision.
      No migration code needed — app not in production; rewrite data directly. -->
 
+## 2026-06-23 — Scroll performance pass 5 (CDP-measured hover optimisation)
+- **Method**: Node.js + Chrome DevTools Protocol (`perf-test.mjs`) running 1,655 real DOM cells
+- **CDP baselines** (pass 4 state): hover ScriptDuration 6.25ms/event; renderCanvas(full) 67ms/call; renderCanvas({bedId}) 33ms/call; Layerize = 0
+- **JS** `showPlantInfo`: added same-instance cache guard — when the mouse moves across multiple cells of the same plant instance, the info panel no longer re-renders (early return if `plantId + instanceId` unchanged); cache resets in `clearInstanceHover` when leaving the instance
+- **JS** `showPlantInfo`: consolidated 3+ separate `Store.getBeds().find()` + `findOriginCell()` calls into one shared lookup (`_infobed`, `_infoOrigin`, `_infoOriginCell`) at the top of the function — previously each of the seed-assign, path-edit, row-details, and lifecycle sub-blocks did an independent full cell scan
+- **CDP results after pass 5**: hover ScriptDuration 2.17ms/event (−65%); renderCanvas(bedId) 15.9ms/call; renderCanvas(full) 34ms/call; Layerize 0ms
+
 ## 2026-06-23 — Scroll performance pass 4 (Layerize + delegation)
 - **Profiler revealed**: `Layerize` sub-task = 50% of all Rendering — compositor rebuilding layer trees on every scroll frame
 - **Root cause**: `content-visibility: auto` on `.bed-block` triggers a full Layerize cycle each time a bed enters/exits the viewport; worse than the initial render cost it was saving
