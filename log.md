@@ -8,6 +8,13 @@ project: garden-planner
 <!-- Newest first. One entry per meaningful change or decision.
      No migration code needed — app not in production; rewrite data directly. -->
 
+## 2026-07-10 — Performance pass 6 (journal cache + targeted DOM updates + hover DOM-scan elimination)
+- **JS** `Store.getLifecycleJournal()`: Added `_journalCache` (same lazy-cache pattern as `_bedsCache`/`_inventoryCache`) — previously every call deserialized the full journal from localStorage; now O(1) after first read; invalidated automatically when `saveLifecycleJournal()` is called; eliminates redundant JSON.parse on every hover (`showPlantInfo` → `lifecycleTimelineForInstance`), every inventory render (`seedGerminationStats` per seed), and every stats render
+- **JS** `Inventory.adjustQty` / `setQty`: Replaced full `render()` call with targeted `_applyQtyToDom()` helper — patches only the input value, card stock class, and badge text/class in the existing card; avoids rebuilding the entire inventory grid (including per-seed journal reads) on every +/− button press
+- **JS** `beds.js`: Added module-level `_instanceMetaByBed` Map (bedId → instanceMeta object); `bedBlockHtml()` now stores its `instanceMeta` into this map (including `originKey` for each origin cell) so post-render code can use it without re-walking bed cells
+- **JS** `findOriginCell`: Added O(1) fast-path via `_instanceMetaByBed` cached `originKey`; falls back to full linear scan only when meta not yet built (before first render or after undo)
+- **JS** `hoverInstanceCells` / `focusInstanceCells` / `focusSelectedInstances`: Replaced `querySelectorAll(.gcell[data-bed=...][data-instance=...])` DOM scans with `_markInstanceEls()` which uses `gcellEl()` O(1) ID lookups over the bounding box only; `querySelector` retained for the at-most-one overlay element; eliminates the explicit "DOM scans in hover callbacks" banned pattern
+
 ## 2026-06-23 — Scroll performance pass 5 (CDP-measured hover optimisation)
 - **Method**: Node.js + Chrome DevTools Protocol (`perf-test.mjs`) running 1,655 real DOM cells
 - **CDP baselines** (pass 4 state): hover ScriptDuration 6.25ms/event; renderCanvas(full) 67ms/call; renderCanvas({bedId}) 33ms/call; Layerize = 0

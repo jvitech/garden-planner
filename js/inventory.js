@@ -228,24 +228,37 @@ const Inventory = (() => {
   }
 
   // ── actions ───────────────────────────────────────────────────
+
+  // Patches only the qty-dependent elements in an already-rendered card.
+  // Avoids a full render() call (which rebuilds the entire grid + journal reads)
+  // for a simple stock count change.
+  function _applyQtyToDom(id, qty) {
+    const card = document.querySelector(`.seed-card[data-id="${id}"]`);
+    if (!card) return;
+    const inp = card.querySelector('.qty-val input');
+    if (inp) inp.value = qty;
+    card.classList.toggle('no-stock',  qty <= 0);
+    card.classList.toggle('low-stock', qty > 0 && qty <= 10);
+    const badge = card.querySelector('.stock-badge:not(.stock-sealed)');
+    if (badge) {
+      badge.className = `stock-badge ${qty <= 0 ? 'stock-none' : qty <= 10 ? 'stock-low' : 'stock-ok'}`;
+      badge.textContent = qty <= 0 ? 'Out of stock' : qty <= 10 ? 'Low stock' : 'In stock';
+    }
+  }
+
   function adjustQty(id, delta) {
     const newQty = Store.adjustSeedQty(id, delta);
-    const card   = document.querySelector(`.seed-card[data-id="${id}"]`);
-    if (card) {
-      const inp = card.querySelector('.qty-val input');
-      if (inp) inp.value = newQty;
-      // re-render whole card to update badge/class
-      render();
-    }
+    if (newQty !== undefined) _applyQtyToDom(id, newQty);
   }
 
   function setQty(id, val) {
     const list = Store.getInventory();
     const seed = list.find(s => s.id === id);
     if (!seed) return;
-    seed.qty = Math.max(0, parseInt(val, 10) || 0);
+    const newQty = Math.max(0, parseInt(val, 10) || 0);
+    seed.qty = newQty;
     Store.saveInventory(list);
-    render();
+    _applyQtyToDom(id, newQty);
   }
 
   function deleteSeed(id) {

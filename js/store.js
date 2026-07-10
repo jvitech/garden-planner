@@ -49,6 +49,7 @@ const Store = (() => {
   let _bedsCache = null;
   let _customPlantsCache = null;
   let _inventoryCache = null;
+  let _journalCache = null;
 
   // ── beds ─────────────────────────────────────────────────────
   // Bed shape: { id, name, widthM, heightM, cols, rows,
@@ -215,8 +216,15 @@ const Store = (() => {
   //   id, ts, seasonYear, bedId, bedName, instanceId, plantId, seedId,
   //   fromState, toState, action
   // }
-  function getLifecycleJournal() { return load(KEYS.lifecycleJournal, []); }
-  function saveLifecycleJournal(list) { save(KEYS.lifecycleJournal, list); }
+  function getLifecycleJournal() {
+    if (_journalCache) return _journalCache;
+    _journalCache = load(KEYS.lifecycleJournal, []);
+    return _journalCache;
+  }
+  function saveLifecycleJournal(list) {
+    _journalCache = list;
+    save(KEYS.lifecycleJournal, list);
+  }
 
   function addLifecycleEvent(event) {
     const list = getLifecycleJournal();

@@ -58,6 +58,9 @@ const Beds = (() => {
   // showPlantInfo cache — skip re-render when same plant+instance already showing.
   let _shownInfoPlantId = null;
   let _shownInfoInstanceId = null;
+  // Per-bed instanceMeta index: Map<bedId, { [instanceId]: { minR, maxR, minC, maxC, originKey, ... } }>
+  // Populated by bedBlockHtml(); used by hover/focus/findOriginCell to avoid querySelectorAll DOM scans.
+  let _instanceMetaByBed = new Map();
 
   const JOURNAL_IMAGE_DIR = 'photos/journal';
   const SEED_IMAGE_DIR = 'photos/seeds';
@@ -408,13 +411,24 @@ const Beds = (() => {
   // Find the origin cell for an instanceId across the whole bed.
   // Returns { key, cell, index } or null.
   function findOriginCell(bed, instanceId) {
+    // Fast path: use the cached meta index built during the last render of this bed.
+    const bedMeta = _instanceMetaByBed.get(bed.id);
+    const cachedKey = bedMeta?.[instanceId]?.originKey;
+    if (cachedKey) {
+      const arr = bed.cells[cachedKey];
+      if (Array.isArray(arr)) {
+        for (let i = 0; i < arr.length; i++) {
+          const c = normalizeCellValue(arr[i], cachedKey);
+          if (c?.instanceId === instanceId && c.origin) return { key: cachedKey, cell: c, index: i };
+        }
+      }
+    }
+    // Fallback: full linear scan (bed not yet rendered, or meta stale after undo).
     for (const [k, arr] of Object.entries(bed.cells || {})) {
       if (!Array.isArray(arr)) continue;
       for (let i = 0; i < arr.length; i++) {
         const c = normalizeCellValue(arr[i], k);
-        if (c?.instanceId === instanceId && c.origin) {
-          return { key: k, cell: c, index: i };
-        }
+        if (c?.instanceId === instanceId && c.origin) return { key: k, cell: c, index: i };
       }
     }
     return null;
@@ -1309,14 +1323,7 @@ const Beds = (() => {
   function focusSelectedInstances() {
     clearInstanceFocus();
     selectedLifecycleInstances.forEach(t => {
-      document.querySelectorAll(`.gcell[data-bed="${t.bedId}"][data-instance="${t.instanceId}"]`).forEach(el => {
-        el.classList.add('instance-focus');
-        _focusedInstanceEls.push(el);
-      });
-      document.querySelectorAll(`.gcell-plant-overlay[data-bed="${t.bedId}"][data-instance="${t.instanceId}"]`).forEach(el => {
-        el.classList.add('instance-focus');
-        _focusedInstanceEls.push(el);
-      });
+      _markInstanceEls(t.bedId, t.instanceId, 'instance-focus', _focusedInstanceEls);
     });
     _syncMultiDeleteBtn(selectedLifecycleInstances.length);
   }
@@ -1330,30 +1337,42 @@ const Beds = (() => {
     _shownInfoInstanceId = null;
   }
 
+  // Applies a CSS class to all DOM elements belonging to a specific plant instance.
+  // Uses the cached instanceMeta bounding box + gcellEl() O(1) lookups instead of
+  // querySelectorAll (which scans the entire bed DOM — a banned pattern in hover callbacks).
+  function _markInstanceEls(bedId, instanceId, cssClass, targetArr) {
+    if (!bedId || !instanceId) return;
+    const meta = _instanceMetaByBed.get(bedId)?.[instanceId];
+    if (meta) {
+      for (let r = meta.minR; r <= meta.maxR; r++) {
+        for (let c = meta.minC; c <= meta.maxC; c++) {
+          const el = gcellEl(bedId, r, c);
+          if (el && el.dataset.instance === instanceId) {
+            el.classList.add(cssClass);
+            targetArr.push(el);
+          }
+        }
+      }
+    } else {
+      // Fallback when meta not yet built (e.g. before first render).
+      document.querySelectorAll(`.gcell[data-bed="${bedId}"][data-instance="${instanceId}"]`).forEach(el => {
+        el.classList.add(cssClass);
+        targetArr.push(el);
+      });
+    }
+    // Multi-cell overlay: at most one per instance, querySelector is fine here.
+    const overlay = document.querySelector(`.gcell-plant-overlay[data-bed="${bedId}"][data-instance="${instanceId}"]`);
+    if (overlay) { overlay.classList.add(cssClass); targetArr.push(overlay); }
+  }
+
   function focusInstanceCells(bedId, instanceId) {
     clearInstanceFocus();
-    if (!bedId || !instanceId) return;
-    document.querySelectorAll(`.gcell[data-bed="${bedId}"][data-instance="${instanceId}"]`).forEach(el => {
-      el.classList.add('instance-focus');
-      _focusedInstanceEls.push(el);
-    });
-    document.querySelectorAll(`.gcell-plant-overlay[data-bed="${bedId}"][data-instance="${instanceId}"]`).forEach(el => {
-      el.classList.add('instance-focus');
-      _focusedInstanceEls.push(el);
-    });
+    _markInstanceEls(bedId, instanceId, 'instance-focus', _focusedInstanceEls);
   }
 
   function hoverInstanceCells(bedId, instanceId) {
     clearInstanceHover();
-    if (!bedId || !instanceId) return;
-    document.querySelectorAll(`.gcell[data-bed="${bedId}"][data-instance="${instanceId}"]`).forEach(el => {
-      el.classList.add('instance-hover');
-      _hoveredInstanceEls.push(el);
-    });
-    document.querySelectorAll(`.gcell-plant-overlay[data-bed="${bedId}"][data-instance="${instanceId}"]`).forEach(el => {
-      el.classList.add('instance-hover');
-      _hoveredInstanceEls.push(el);
-    });
+    _markInstanceEls(bedId, instanceId, 'instance-hover', _hoveredInstanceEls);
   }
 
   function updateRotationUi() {
@@ -2337,9 +2356,11 @@ const Beds = (() => {
         if (cell.origin) existing.seedId = cell.seedId || null;
         if (cell.origin) existing.lifecycle = cell.lifecycle || 'planned';
         if (cell.origin) existing.seasonalMode = cell.seasonalMode || false;
+        if (cell.origin) existing.originKey = key;
         instanceMeta[cell.instanceId] = existing;
       }
     });
+    _instanceMetaByBed.set(bed.id, instanceMeta);
 
     // Per-plant memos for the cell loop (constant within a single render).
     const rgByPlantId    = new Map();
